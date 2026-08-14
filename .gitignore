@@ -6,8 +6,7 @@ target/
 # locking dependencies ensures reproducible builds).
 
 # ===== Tauri =====
-src-tauri/target/
-src-tauri/build/
+target/
 *.pdb
 *.exe
 *.dll

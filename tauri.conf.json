@@ -3,8 +3,10 @@
   "identifier": "com.omnid.app",
   "version": "0.1.0",
   "build": {
-    "frontendDist": "../frontend/dist",
-    "devUrl": "http://localhost:1420"
+    "frontendDist": "frontend/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
   },
   "app": {
     "windows": [

@@ -56,14 +56,11 @@ The app has three main pages:
 git clone https://github.com/<your-org>/OmniMD.git
 cd OmniMD
 
-# 2. Install frontend dependencies
-cd frontend
-pnpm install
+# 2. Install backend (Tauri CLI) + frontend dependencies
+pnpm install        # installs root deps (Tauri CLI)
+cd frontend && pnpm install
 
-# 3. Add Tauri CLI (first time only)
-pnpm add -D @tauri-apps/cli
-
-# 4. Start dev mode (compiles Rust backend + frontend hot-reload)
+# 3. Start dev mode (compiles Rust backend + frontend hot-reload)
 pnpm tauri dev
 ```
 
@@ -72,17 +69,21 @@ The first launch compiles many Rust dependencies (expect 5–15 min). Subsequent
 ## 📦 Build for Release
 
 ```bash
-cd frontend
 pnpm tauri build
 ```
 
-Artifacts are placed in `frontend/src-tauri/target/release/bundle/` (`.msi` / `.exe` installers on Windows).
+Artifacts are placed in `target/release/bundle/` (`.msi` / `.exe` installers on Windows).
 
 ## 🏗️ Project Structure
 
 ```
 OmniMD/
-├── src/                    # Rust backend
+├── package.json              # Root scripts + Tauri CLI
+├── Cargo.toml                # Rust dependencies
+├── tauri.conf.json           # Tauri app configuration
+├── capabilities/             # Tauri permission configuration
+├── icons/                    # Application icons
+├── src/                      # Rust backend
 │   ├── main.rs             # Entry point
 │   ├── lib.rs              # Tauri command registration (frontend API)
 │   ├── pipeline.rs         # Conversion pipeline (read → convert → write)
@@ -98,10 +99,7 @@ OmniMD/
 │   │   ├── components/     # Reusable components
 │   │   └── types/          # Shared type definitions
 │   └── vite.config.ts      # Vite config (port 1420)
-├── tauri.conf.json         # Tauri app configuration
-├── capabilities/           # Tauri permission configuration
-├── Cargo.toml              # Rust dependencies
-└── tests/                  # Integration tests + fixtures
+├── tests/                  # Integration tests + fixtures
 ```
 
 ## 🔌 Frontend–Backend Communication

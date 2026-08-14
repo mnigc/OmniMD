@@ -56,14 +56,11 @@
 git clone https://github.com/<your-org>/OmniMD.git
 cd OmniMD
 
-# 2. 安装前端依赖
-cd frontend
-pnpm install
+# 2. 安装后端（Tauri CLI）+ 前端依赖
+pnpm install        # 安装根目录依赖（含 Tauri CLI）
+cd frontend && pnpm install
 
-# 3. 添加 Tauri CLI（首次）
-pnpm add -D @tauri-apps/cli
-
-# 4. 启动开发模式（同时编译 Rust 后端 + 前端热更新）
+# 3. 启动开发模式（同时编译 Rust 后端 + 前端热更新）
 pnpm tauri dev
 ```
 
@@ -72,11 +69,10 @@ pnpm tauri dev
 ## 📦 打包发布
 
 ```bash
-cd frontend
 pnpm tauri build
 ```
 
-产物位于 `frontend/src-tauri/target/release/bundle/`，Windows 下生成 `.msi` / `.exe` 安装包。
+产物位于 `target/release/bundle/`，Windows 下生成 `.msi` / `.exe` 安装包。
 
 ## 🏗️ 项目结构
 
