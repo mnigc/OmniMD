@@ -5,22 +5,29 @@ import {
   FolderOpen,
   LayoutTemplate,
   Maximize2,
-  Minimize2,
-  RefreshCw,
   Code,
   Eye,
+  RefreshCw,
+  ArrowLeft,
 } from "lucide-react";
 import { MarkdownPreview } from "../components/MarkdownPreview";
+import { SegmentedControl } from "../components/SegmentedControl";
 import { useTaskStore } from "../store/useTaskStore";
-import { cn } from "../lib/utils";
+import { useI18n } from "../i18n";
+import { Button } from "../components/ui/button";
+import { Separator } from "../components/ui/separator";
 
-export function ConvertPage() {
+type ViewMode = "edit" | "preview" | "split";
+
+interface ConvertPageProps {
+  onNavigate?: (page: "home") => void;
+}
+
+export function ConvertPage({ onNavigate }: ConvertPageProps) {
+  const { t } = useI18n();
   const { currentTask, currentResult } = useTaskStore();
-  const [viewMode, setViewMode] = useState<"edit" | "preview" | "split">(
-    "split"
-  );
+  const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [markdown, setMarkdown] = useState("");
-  const [outputPath, setOutputPath] = useState("");
 
   useEffect(() => {
     if (currentResult?.markdown) {
@@ -28,17 +35,47 @@ export function ConvertPage() {
     }
   }, [currentResult]);
 
+  const viewOptions: {
+    value: ViewMode;
+    icon: React.ReactNode;
+    label: string;
+  }[] = [
+    { value: "edit", icon: <Code size={16} />, label: t("convert.editOnly") },
+    {
+      value: "preview",
+      icon: <Eye size={16} />,
+      label: t("convert.previewOnly"),
+    },
+    {
+      value: "split",
+      icon: <LayoutTemplate size={16} />,
+      label: t("convert.splitView"),
+    },
+  ];
+
   if (!currentTask || !currentResult) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="text-center">
-          <FileDown className="mx-auto mb-4 text-muted-foreground opacity-50" size={48} />
-          <p className="text-lg font-medium text-slate-900">
-            No file to preview
-          </p>
+          <FileDown
+            className="mx-auto mb-4 text-muted-foreground opacity-50"
+            size={48}
+          />
+          <p className="text-lg font-medium">{t("convert.noFile")}</p>
           <p className="text-sm text-muted-foreground mt-1">
-            Drop a file on the Home page to start converting
+            {t("convert.noFileHint")}
           </p>
+          {onNavigate && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-4"
+              onClick={() => onNavigate("home")}
+            >
+              <ArrowLeft size={14} />
+              {t("nav.home")}
+            </Button>
+          )}
         </div>
       </div>
     );
@@ -47,81 +84,49 @@ export function ConvertPage() {
   return (
     <div className="h-full flex flex-col">
       <div className="border-b border-border px-4 py-2 flex items-center gap-3 shrink-0">
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-md border border-border">
+        <div className="flex items-center gap-2 h-8 px-3 bg-muted rounded-md">
           <FileDown size={14} className="text-muted-foreground" />
-          <span className="text-sm font-medium">{currentTask.sourcePath.split("/").pop()}</span>
+          <span className="text-sm font-medium truncate max-w-72">
+            {currentTask.sourcePath.split("/").pop()}
+          </span>
         </div>
 
-        <div className="flex items-center gap-1 ml-auto">
-          <button
-            onClick={() =>
-              setViewMode(viewMode === "split" ? "edit" : "split")
-            }
-            className={cn(
-              "p-1.5 rounded transition-colors",
-              viewMode === "edit"
-                ? "bg-violet-100 text-violet-700"
-                : "hover:bg-slate-100 text-muted-foreground"
-            )}
-            title="Edit only"
-          >
-            <Code size={16} />
-          </button>
-          <button
-            onClick={() =>
-              setViewMode(viewMode === "split" ? "preview" : "split")
-            }
-            className={cn(
-              "p-1.5 rounded transition-colors",
-              viewMode === "preview"
-                ? "bg-violet-100 text-violet-700"
-                : "hover:bg-slate-100 text-muted-foreground"
-            )}
-            title="Preview only"
-          >
-            <Eye size={16} />
-          </button>
-          <button
-            onClick={() => setViewMode("split")}
-            className={cn(
-              "p-1.5 rounded transition-colors",
-              viewMode === "split"
-                ? "bg-violet-100 text-violet-700"
-                : "hover:bg-slate-100 text-muted-foreground"
-            )}
-            title="Split view"
-          >
-            <LayoutTemplate size={16} />
-          </button>
+        <div className="ml-auto">
+          <SegmentedControl
+            options={viewOptions}
+            value={viewMode}
+            onChange={setViewMode}
+            size="md"
+          />
         </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
         {(viewMode === "edit" || viewMode === "split") && (
-          <div className="flex-1 flex flex-col border-r border-border">
-            <div className="border-b border-border px-3 py-1.5 flex items-center gap-2 bg-slate-50">
+          <div className="flex-1 flex flex-col min-w-0 border-r border-border">
+            <div className="h-9 border-b border-border px-3 flex items-center gap-2 bg-muted/30">
               <span className="text-xs font-medium text-muted-foreground">
-                Markdown
+                {t("convert.markdown")}
               </span>
             </div>
             <textarea
-              className="flex-1 p-4 text-sm font-mono resize-none focus:outline-none"
+              className="flex-1 p-4 text-sm font-mono resize-none focus:outline-none bg-transparent"
               value={markdown}
               onChange={(e) => setMarkdown(e.target.value)}
-              placeholder="Markdown content will appear here..."
+              placeholder={t("convert.markdownPlaceholder")}
               spellCheck={false}
             />
           </div>
         )}
 
         {(viewMode === "preview" || viewMode === "split") && (
-          <div className="flex-1 flex flex-col">
-            <div className="border-b border-border px-3 py-1.5 flex items-center gap-2 bg-slate-50">
+          <div className="flex-1 flex flex-col min-w-0">
+            <div className="h-9 border-b border-border px-3 flex items-center gap-2 bg-muted/30">
               <span className="text-xs font-medium text-muted-foreground">
-                Preview
+                {t("convert.preview")}
               </span>
-              <span className="text-[10px] text-muted-foreground ml-auto">
-                {currentResult.assetCount} assets
+              <span className="text-xs text-muted-foreground ml-auto">
+                {currentResult.assetCount} {t("convert.assets")}
               </span>
             </div>
             <div className="flex-1 overflow-auto p-4 prose prose-sm max-w-none">
@@ -131,43 +136,43 @@ export function ConvertPage() {
         )}
       </div>
 
-      <div className="border-t border-border px-4 py-3 flex items-center gap-2 bg-slate-50 shrink-0">
-        <button
+      <div className="border-t border-border bg-muted/30 px-4 py-3 flex items-center gap-2 shrink-0">
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => {
             if (navigator.clipboard) {
               navigator.clipboard.writeText(markdown);
             }
           }}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-200 rounded-md hover:bg-slate-100 transition-colors"
         >
           <Copy size={14} />
-          Copy Markdown
-        </button>
-        <button
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-200 rounded-md hover:bg-slate-100 transition-colors"
-        >
+          {t("convert.copyMarkdown")}
+        </Button>
+        <Button variant="outline" size="sm">
           <FileDown size={14} />
-          Save .md
-        </button>
-        <button
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-200 rounded-md hover:bg-slate-100 transition-colors"
-        >
+          {t("convert.saveMd")}
+        </Button>
+        <Button variant="outline" size="sm">
           <FolderOpen size={14} />
-          Open Folder
-        </button>
-        <button
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-200 rounded-md hover:bg-slate-100 transition-colors"
-        >
+          {t("convert.openFolder")}
+        </Button>
+        <Button variant="outline" size="sm">
           <RefreshCw size={14} />
-          Re-convert
-        </button>
-        <button
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-200 rounded-md hover:bg-slate-100 transition-colors ml-auto opacity-50"
+          {t("convert.reconvert")}
+        </Button>
+
+        <Separator orientation="vertical" className="h-6 mx-1" />
+
+        <Button
+          className="ml-auto opacity-50"
+          variant="outline"
+          size="sm"
           disabled
         >
           <Maximize2 size={14} />
-          AI Optimize (Phase 3)
-        </button>
+          {t("convert.aiOptimize")}
+        </Button>
       </div>
     </div>
   );

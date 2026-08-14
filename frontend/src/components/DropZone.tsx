@@ -1,15 +1,24 @@
 import { useCallback, useState } from "react";
-import { FileUp, Upload, X } from "lucide-react";
+import { Check, FileUp, Upload, X } from "lucide-react";
 import { pickFiles } from "../api/dialogs";
+import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
+import { Badge } from "./ui/badge";
 
 interface DropZoneProps {
   onFiles: (paths: string[]) => void;
   disabled: boolean;
   formats: string[];
+  className?: string;
 }
 
-export function DropZone({ onFiles, disabled, formats }: DropZoneProps) {
+export function DropZone({
+  onFiles,
+  disabled,
+  formats,
+  className,
+}: DropZoneProps) {
+  const { t } = useI18n();
   const [isDragging, setIsDragging] = useState(false);
   const [dragCount, setDragCount] = useState(0);
   const [selectedCount, setSelectedCount] = useState(0);
@@ -50,8 +59,6 @@ export function DropZone({ onFiles, disabled, formats }: DropZoneProps) {
       e.stopPropagation();
       setIsDragging(false);
       setDragCount(0);
-      // Browser sandboxing prevents access to full file paths from dropped
-      // files, so open the native file dialog to resolve real paths.
       openFilePicker();
     },
     [openFilePicker]
@@ -67,20 +74,21 @@ export function DropZone({ onFiles, disabled, formats }: DropZoneProps) {
       role="button"
       aria-disabled={disabled}
       className={cn(
-        "relative flex flex-col items-center justify-center p-8 rounded-xl border-2 border-dashed transition-all duration-200 cursor-pointer",
+        "relative flex flex-col items-center justify-center p-8 rounded-xl border-2 border-dashed transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        className,
         disabled
-          ? "border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed"
+          ? "border-input bg-muted/50 opacity-60 cursor-not-allowed"
           : isDragging
-            ? "border-violet-500 bg-violet-50/50 scale-[1.01] shadow-lg shadow-violet-100"
-            : "border-slate-300 bg-slate-50/50 hover:border-slate-400 hover:bg-slate-100/50"
+            ? "border-primary bg-primary/5 scale-[1.01] shadow-lg shadow-primary/10"
+            : "border-border bg-muted/30 hover:border-primary/50 hover:bg-muted/50"
       )}
     >
       <div
         className={cn(
           "mb-4 p-4 rounded-full transition-colors",
           isDragging
-            ? "bg-violet-100 text-violet-600"
-            : "bg-slate-200 text-slate-500"
+            ? "bg-primary/10 text-primary"
+            : "bg-muted text-muted-foreground"
         )}
       >
         {disabled ? (
@@ -92,49 +100,23 @@ export function DropZone({ onFiles, disabled, formats }: DropZoneProps) {
         )}
       </div>
 
-      <p className="text-base font-medium text-slate-900 mb-1">
+      <p className="text-base font-medium mb-1">
         {disabled
-          ? "Drop disabled"
+          ? t("dropzone.dropDisabled")
           : isDragging
-            ? "Release to open file picker"
-            : "Drop files here or click to browse"}
+            ? t("dropzone.releaseToOpen")
+            : t("dropzone.dropFiles")}
       </p>
       <p className="text-sm text-muted-foreground text-center">
-        Supported: DOCX, PDF, PPTX, XLSX, EPUB, CSV, TXT, HTML, RTF, ODT...
+        {t("dropzone.supported")}
       </p>
 
       {selectedCount > 0 && (
-        <div className="mt-4 flex items-center gap-2 px-3 py-1.5 bg-green-50 border border-green-200 rounded-md">
-          <CheckmarkIcon className="text-green-600" size={14} />
-          <span className="text-xs text-green-700">
-            {selectedCount} file{selectedCount > 1 ? "s" : ""} selected
-          </span>
-        </div>
+        <Badge variant="success" className="mt-4 gap-1">
+          <Check size={12} />
+          {selectedCount} {t("dropzone.files")} {t("dropzone.selected")}
+        </Badge>
       )}
     </div>
-  );
-}
-
-function CheckmarkIcon({
-  size,
-  className,
-}: {
-  size: number;
-  className?: string;
-}) {
-  return (
-    <svg
-      className={className}
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
   );
 }

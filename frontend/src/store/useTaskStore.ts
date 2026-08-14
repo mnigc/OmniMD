@@ -28,6 +28,8 @@ interface TaskStore {
   clearCompleted: () => void;
   setCurrentTask: (task: ConversionTask | null, result?: ConversionResult) => void;
   selectTask: (taskId: string) => void;
+  concurrency: number;
+  setConcurrency: (n: number) => void;
 }
 
 function generateId(): string {
@@ -38,6 +40,7 @@ export const useTaskStore = create<TaskStore>((set) => ({
   tasks: [],
   currentTask: null,
   currentResult: null,
+  concurrency: 4,
 
   addTasks: (paths: string[], outputDir: string) => {
     const newTasks: ConversionTask[] = paths.map((path) => {
@@ -134,4 +137,6 @@ export const useTaskStore = create<TaskStore>((set) => ({
       const result = null;
       return { currentTask: task ?? null, currentResult: result };
     }),
+
+  setConcurrency: (n) => set({ concurrency: n }),
 }));

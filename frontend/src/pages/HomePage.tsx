@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  FilePlus,
-  Download,
-  FolderOpen,
-  Loader2,
-  Link,
-  CheckCircle2,
-  XCircle,
-  Trash2,
-  RotateCcw,
-} from "lucide-react";
+import { FilePlus, FolderOpen, Link, Loader2, Trash2, RotateCcw } from "lucide-react";
 import { DropZone } from "../components/DropZone";
 import { TaskItem } from "../components/TaskItem";
 import { convertBatch, convertFile, getSupportedFormats } from "../api/tauriApi";
 import { pickFiles, pickOutputDir } from "../api/dialogs";
 import { useTaskStore } from "../store/useTaskStore";
+import { useI18n } from "../i18n";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card";
+import { ScrollArea } from "../components/ui/scroll-area";
+
 type Page = "home" | "convert" | "batch" | "settings";
 
 interface HomePageProps {
@@ -22,6 +25,7 @@ interface HomePageProps {
 }
 
 export function HomePage({ onNavigate }: HomePageProps) {
+  const { t } = useI18n();
   const {
     tasks,
     addTasks,
@@ -29,10 +33,11 @@ export function HomePage({ onNavigate }: HomePageProps) {
     failTask,
     clearCompleted,
     setCurrentTask,
+    concurrency,
+    setConcurrency,
   } = useTaskStore();
 
   const [outputDir, setOutputDir] = useState("");
-  const [concurrency, setConcurrency] = useState(4);
   const [converting, setConverting] = useState(false);
   const [supportedFormats, setSupportedFormats] = useState<string[]>([]);
 
@@ -44,7 +49,9 @@ export function HomePage({ onNavigate }: HomePageProps) {
     async (paths: string[]) => {
       if (paths.length === 0) return;
 
-      const dir = outputDir || paths[0].replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+      const dir =
+        outputDir ||
+        paths[0].replace(/\\/g, "/").split("/").slice(0, -1).join("/");
       const placeholders = addTasks(paths, dir);
 
       setConverting(true);
@@ -104,7 +111,15 @@ export function HomePage({ onNavigate }: HomePageProps) {
         }
       }
     },
-    [addTasks, finalizeTask, failTask, setCurrentTask, onNavigate, outputDir, concurrency]
+    [
+      addTasks,
+      finalizeTask,
+      failTask,
+      setCurrentTask,
+      onNavigate,
+      outputDir,
+      concurrency,
+    ]
   );
 
   const handleBrowseOutputDir = useCallback(async () => {
@@ -120,154 +135,175 @@ export function HomePage({ onNavigate }: HomePageProps) {
   }, [handleFiles, supportedFormats]);
 
   const totalTasks = tasks.length;
-  const completedTasks = tasks.filter((t) => t.status === "Completed").length;
-  const failedTasks = tasks.filter((t) => t.status === "Failed").length;
+  const completedTasks = tasks.filter((tsk) => tsk.status === "Completed").length;
+  const failedTasks = tasks.filter((tsk) => tsk.status === "Failed").length;
 
   const activeTasks = tasks.filter(
-    (t) => t.status !== "Completed" && t.status !== "Cancelled"
+    (tsk) => tsk.status !== "Completed" && tsk.status !== "Cancelled"
   );
 
   return (
     <div className="h-full flex flex-col">
       <div className="flex-1 p-6 flex flex-col gap-6 overflow-auto">
+        <div className="max-w-6xl mx-auto w-full flex flex-col gap-6 flex-1">
         <div className="text-center mb-2">
-          <h1 className="text-3xl font-bold text-slate-900">
-            Convert Anything to Markdown
+          <h1 className="text-xl font-semibold tracking-tight">
+            {t("home.title")}
           </h1>
-          <p className="text-muted-foreground mt-2 text-sm">
-            Drop DOCX, PDF, PPTX, XLSX, EPUB, CSV, TXT, HTML, and more
+          <p className="text-muted-foreground mt-1.5 text-sm">
+            {t("home.subtitle")}
           </p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1">
           <div className="lg:col-span-2 flex flex-col gap-4">
-            <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg border border-border">
-              <input
-                type="text"
-                value={outputDir}
-                onChange={(e) => setOutputDir(e.target.value)}
-                placeholder="Output directory (e.g. /home/user/output)"
-                className="flex-1 px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
-              <button
-                onClick={handleBrowseOutputDir}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white text-sm rounded-md hover:bg-slate-800 transition-colors"
-              >
-                <FolderOpen size={14} />
-                Browse
-              </button>
+            <div className="flex flex-wrap gap-x-6 gap-y-4">
+              <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+                <Label className="text-xs text-muted-foreground">
+                  {t("home.outputDir")}
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="text"
+                    value={outputDir}
+                    onChange={(e) => setOutputDir(e.target.value)}
+                    placeholder={t("home.outputDirPlaceholder")}
+                    className="flex-1 min-w-0"
+                  />
+                  <Button variant="outline" onClick={handleBrowseOutputDir}>
+                    <FolderOpen size={14} />
+                    {t("home.browse")}
+                  </Button>
+                </div>
+              </div>
+              <div className="w-24 flex flex-col gap-1.5 shrink-0">
+                <Label className="text-xs text-muted-foreground">
+                  {t("home.concurrency")}
+                </Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={16}
+                  value={concurrency}
+                  onChange={(e) => setConcurrency(parseInt(e.target.value) || 1)}
+                />
+              </div>
             </div>
 
             <DropZone
               onFiles={handleFiles}
               disabled={converting}
               formats={supportedFormats}
+              className="flex-1 min-h-[220px]"
             />
 
             <div className="flex items-center gap-3">
-              <button
-                onClick={handleAddFiles}
-                disabled={converting}
-                className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white text-sm rounded-md hover:bg-violet-700 disabled:opacity-50 transition-colors"
-              >
+              <Button onClick={handleAddFiles} disabled={converting}>
                 <FilePlus size={16} />
-                Add Files
-              </button>
-              <div className="flex items-center gap-2 px-3 py-1.5 border border-slate-200 rounded-md">
-                <Link size={14} className="text-muted-foreground" />
-                <input
+                {t("home.addFiles")}
+              </Button>
+
+              <div className="relative flex-1 max-w-52">
+                <Link
+                  size={14}
+                  className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+                />
+                <Input
                   type="text"
-                  placeholder="Paste URL (Phase 2)"
+                  placeholder={t("home.pasteUrl")}
                   disabled
-                  className="text-xs text-muted-foreground bg-transparent focus:outline-none w-40"
-                />
-              </div>
-              <div className="ml-auto flex items-center gap-2">
-                <label className="text-xs text-muted-foreground">
-                  Concurrency
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={16}
-                  value={concurrency}
-                  onChange={(e) =>
-                    setConcurrency(parseInt(e.target.value) || 1)
-                  }
-                  className="w-14 px-2 py-1 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  className="pl-8 text-xs"
                 />
               </div>
             </div>
           </div>
 
-          <div className="bg-slate-50 rounded-lg border border-border p-4 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-slate-900">
-                Recent Conversions
-              </h3>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => onNavigate("batch")}
-                  className="p-1 rounded hover:bg-slate-200 transition-colors"
-                  title="View all"
-                >
-                  <RotateCcw size={14} />
-                </button>
-                <button
-                  onClick={clearCompleted}
-                  className="p-1 rounded hover:bg-slate-200 transition-colors"
-                  title="Clear completed"
-                >
-                  <Trash2 size={14} />
-                </button>
+          <Card className="flex flex-col h-full overflow-hidden">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm">
+                  {t("home.recentConversions")}
+                </CardTitle>
+                <div className="flex items-center gap-0.5">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => onNavigate("batch")}
+                    title={t("home.viewAll")}
+                  >
+                    <RotateCcw size={14} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={clearCompleted}
+                    title={t("home.clearCompleted")}
+                  >
+                    <Trash2 size={14} />
+                  </Button>
+                </div>
               </div>
-            </div>
+            </CardHeader>
 
-            <div className="flex-1 overflow-auto space-y-2">
-              {activeTasks.slice(-10).reverse().map((task) => (
-                <TaskItem key={task.id} task={task} compact />
-              ))}
-              {activeTasks.length === 0 && (
-                <p className="text-xs text-center text-muted-foreground py-8">
-                  No tasks yet
-                </p>
+            <CardContent className="flex-1 min-h-0 p-0">
+              {activeTasks.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+                  <Loader2
+                    className="mx-auto mb-3 text-muted-foreground opacity-30"
+                    size={32}
+                  />
+                  <p className="text-sm font-medium">{t("home.noTasks")}</p>
+                </div>
+              ) : (
+                <ScrollArea className="h-full">
+                  <div className="space-y-2 px-6 py-2 pr-3">
+                    {activeTasks.slice(-10).reverse().map((task) => (
+                      <TaskItem key={task.id} task={task} compact />
+                    ))}
+                  </div>
+                </ScrollArea>
               )}
-            </div>
+            </CardContent>
 
-            <div className="mt-3 pt-3 border-t border-border grid grid-cols-3 gap-2">
-              <div className="text-center">
-                <div className="text-lg font-bold text-slate-900">
-                  {totalTasks}
+            <CardFooter className="mt-auto border-t border-border p-0">
+              <div className="grid grid-cols-3 w-full">
+                <div className="text-center py-3">
+                  <div className="text-2xl font-bold tabular-nums">
+                    {totalTasks}
+                  </div>
+                  <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                    {t("home.total")}
+                  </div>
                 </div>
-                <div className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                  Total
+                <div className="text-center py-3 border-l border-border">
+                  <div className="text-2xl font-bold tabular-nums text-success">
+                    {completedTasks}
+                  </div>
+                  <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                    {t("home.done")}
+                  </div>
+                </div>
+                <div className="text-center py-3 border-l border-border">
+                  <div className="text-2xl font-bold tabular-nums text-destructive">
+                    {failedTasks}
+                  </div>
+                  <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                    {t("home.failed")}
+                  </div>
                 </div>
               </div>
-              <div className="text-center">
-                <div className="text-lg font-bold text-green-600">
-                  {completedTasks}
-                </div>
-                <div className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                  Done
-                </div>
-              </div>
-              <div className="text-center">
-                <div className="text-lg font-bold text-red-600">
-                  {tasks.filter((t) => t.status === "Failed").length}
-                </div>
-                <div className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                  Failed
-                </div>
-              </div>
-            </div>
-          </div>
+            </CardFooter>
+          </Card>
+        </div>
         </div>
       </div>
 
       {converting && (
-        <div className="px-6 py-2 bg-violet-50 border-t border-violet-200 flex items-center gap-2">
-          <Loader2 className="animate-spin text-violet-600" size={16} />
-          <span className="text-sm text-violet-700">Converting...</span>
+        <div className="px-6 py-2 bg-primary/5 border-t border-primary/20 flex items-center gap-2">
+          <Loader2 className="animate-spin text-primary" size={16} />
+          <span className="text-sm text-primary">{t("home.converting")}</span>
         </div>
       )}
     </div>

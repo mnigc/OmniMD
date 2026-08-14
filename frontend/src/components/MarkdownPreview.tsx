@@ -1,19 +1,22 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import { useI18n } from "../i18n";
 
 interface MarkdownPreviewProps {
   content: string;
 }
 
 export function MarkdownPreview({ content }: MarkdownPreviewProps) {
+  const { t } = useI18n();
+
   if (!content.trim()) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-        <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-3">
-          <span className="text-2xl font-bold text-slate-400">{`{ }`}</span>
+        <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-3">
+          <span className="text-2xl font-bold text-muted-foreground">{`{ }`}</span>
         </div>
-        <p className="text-sm">No markdown content to preview</p>
+        <p className="text-sm">{t("markdown.noContent")}</p>
       </div>
     );
   }
@@ -27,7 +30,7 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "");
             return match ? (
-              <pre className="bg-slate-100 border border-slate-200 rounded-md p-3 overflow-x-auto my-2">
+              <pre className="bg-muted border border-border rounded-md p-3 overflow-x-auto my-2">
                 <code
                   className={`font-mono text-sm ${className}`}
                   {...props}
@@ -37,7 +40,7 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
               </pre>
             ) : (
               <code
-                className="bg-slate-100 px-1.5 py-0.5 rounded text-sm font-mono"
+                className="bg-muted px-1.5 py-0.5 rounded text-sm font-mono"
                 {...props}
               >
                 {children}
@@ -52,27 +55,27 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
               <img
                 src={src}
                 alt={alt || ""}
-                className="max-w-full h-auto rounded-md border border-slate-200 my-2"
+                className="max-w-full h-auto rounded-md border border-border my-2"
               />
             );
           },
           table({ children }) {
             return (
-              <div className="overflow-x-auto my-3 border border-slate-200 rounded-md">
+              <div className="overflow-x-auto my-3 border border-border rounded-md">
                 <table className="min-w-full">{children}</table>
               </div>
             );
           },
           th({ children }) {
             return (
-              <th className="px-3 py-2 bg-slate-100 text-left text-sm font-medium border-b border-slate-200">
+              <th className="px-3 py-2 bg-muted text-left text-sm font-medium border-b border-border">
                 {children}
               </th>
             );
           },
           td({ children }) {
             return (
-              <td className="px-3 py-2 text-sm border-b border-slate-100 last:border-b-0">
+              <td className="px-3 py-2 text-sm border-b border-border last:border-b-0">
                 {children}
               </td>
             );
@@ -81,7 +84,7 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
             return (
               <a
                 href={href}
-                className="text-violet-600 hover:underline"
+                className="text-primary hover:underline"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -97,13 +100,13 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
           },
           blockquote({ children }) {
             return (
-              <blockquote className="border-l-4 border-violet-300 pl-4 my-2 text-slate-600 italic">
+              <blockquote className="border-l-4 border-primary/40 pl-4 my-2 text-muted-foreground italic">
                 {children}
               </blockquote>
             );
           },
           hr() {
-            return <hr className="border-slate-200 my-4" />;
+            return <hr className="border-border my-4" />;
           },
         }}
       >

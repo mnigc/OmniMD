@@ -1,9 +1,73 @@
-@tailwind base;
+﻿@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 258 90% 62%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 258 94% 93%;
+    --accent-foreground: 263 70% 40%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 258 90% 62%;
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 258 90% 62%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 263 70% 30%;
+    --accent-foreground: 240 50% 90%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 258 90% 62%;
+    --success: 142 69% 58%;
+    --warning: 38 92% 50%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 .prose h1 {
-  color: hsl(222.2 47.4% 11.2%);
+  color: var(--foreground);
   font-weight: 700;
   font-size: 3rem;
   line-height: 1;
@@ -11,7 +75,7 @@
 }
 
 .prose h2 {
-  color: hsl(222.2 47.4% 11.2%);
+  color: var(--foreground);
   font-weight: 600;
   font-size: 1.5rem;
   line-height: 2rem;
@@ -19,28 +83,28 @@
 }
 
 .prose h3 {
-  color: hsl(222.2 47.4% 11.2%);
+  color: var(--foreground);
   font-weight: 500;
   font-size: 1.125rem;
   line-height: 1.75rem;
 }
 
 .prose h4 {
-  color: hsl(222.2 47.4% 11.2%);
+  color: var(--foreground);
   font-weight: 500;
   font-size: 1rem;
   line-height: 1.5rem;
 }
 
 .prose p {
-  color: hsl(215.4 16.3% 46.9%);
+  color: var(--muted-foreground);
   font-size: 0.875rem;
   line-height: 1.25rem;
 }
 
 .prose table {
-  color: hsl(222.2 47.4% 11.2%);
-  border: 1px solid hsl(214.3 31.8% 91.4%);
+  color: var(--foreground);
+  border: 1px solid var(--border);
   display: table;
   width: 100%;
   border-collapse: collapse;
@@ -50,21 +114,21 @@
 
 .prose thead {
   display: table-header-group;
-  background-color: hsl(210 40% 96.1%);
+  background-color: var(--muted);
 }
 
 .prose th {
-  color: hsl(222.2 47.4% 11.2%);
+  color: var(--foreground);
   font-weight: 500;
   padding: 0.5rem 0.75rem;
-  border: 1px solid hsl(214.3 31.8% 91.4%);
+  border: 1px solid var(--border);
   text-align: left;
 }
 
 .prose td {
-  color: hsl(215.4 16.3% 46.9%);
+  color: var(--muted-foreground);
   padding: 0.5rem 0.75rem;
-  border: 1px solid hsl(214.3 31.8% 91.4%);
+  border: 1px solid var(--border);
 }
 
 .prose tbody {
