@@ -1,0 +1,31 @@
+{
+  "productName": "OmniMD",
+  "identifier": "com.omnid.app",
+  "version": "0.1.0",
+  "build": {
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OmniMD - Anything to Markdown",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ],
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "icon": ["icons/icon.ico"]
+  }
+}

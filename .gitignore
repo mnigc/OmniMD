@@ -1,0 +1,48 @@
+# ===== Rust / Cargo =====
+target/
+**/*.rs.bk
+
+# NOTE: Cargo.lock IS committed (Tauri is a binary project,
+# locking dependencies ensures reproducible builds).
+
+# ===== Tauri =====
+src-tauri/target/
+src-tauri/build/
+*.pdb
+*.exe
+*.dll
+*.lib
+*.exp
+
+# ===== Node / Frontend =====
+frontend/node_modules/
+frontend/dist/
+frontend/.pnpm-store/
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# ===== Environment =====
+.env
+.env.local
+.env.*.local
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ===== Misc =====
+*.log
+*.tmp
+*.temp
+*.crash
+.rustup/settings.toml
