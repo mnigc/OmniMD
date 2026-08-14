@@ -4,13 +4,13 @@ import type {
   ConversionResult,
   TaskStatus,
   ConversionStage,
-} from "./types";
+} from "../types";
 
 interface TaskStore {
   tasks: ConversionTask[];
   currentTask: ConversionTask | null;
   currentResult: ConversionResult | null;
-  addTasks: (paths: string[], outputDir: string) => void;
+  addTasks: (paths: string[], outputDir: string) => ConversionTask[];
   updateTaskProgress: (
     taskId: string,
     progress: number,
@@ -18,6 +18,12 @@ interface TaskStore {
   ) => void;
   completeTask: (taskId: string, result: ConversionResult) => void;
   failTask: (taskId: string, error: string) => void;
+  finalizeTask: (
+    placeholderId: string,
+    taskId: string,
+    result: ConversionResult,
+    error: string | null
+  ) => void;
   cancelTask: (taskId: string) => void;
   clearCompleted: () => void;
   setCurrentTask: (task: ConversionTask | null, result?: ConversionResult) => void;
@@ -33,24 +39,24 @@ export const useTaskStore = create<TaskStore>((set) => ({
   currentTask: null,
   currentResult: null,
 
-  addTasks: (paths: string[], outputDir: string) =>
-    set((state) => {
-      const newTasks: ConversionTask[] = paths.map((path) => {
-        const outputName = path.split("/").pop()?.replace(/\.[^.]+$/, ".md");
-        return {
-          id: generateId(),
-          sourcePath: path,
-          outputPath: `${outputDir}/${outputName}`,
-          status: "Pending" as TaskStatus,
-          progress: 0,
-          stage: "DetectingFormat" as ConversionStage,
-          error: null,
-          createdAt: Date.now(),
-          completedAt: null,
-        };
-      });
-      return { tasks: [...state.tasks, ...newTasks] };
-    }),
+  addTasks: (paths: string[], outputDir: string) => {
+    const newTasks: ConversionTask[] = paths.map((path) => {
+      const outputName = path.split("/").pop()?.replace(/\.[^.]+$/, ".md");
+      return {
+        id: generateId(),
+        sourcePath: path,
+        outputPath: `${outputDir}/${outputName}`,
+        status: "Pending" as TaskStatus,
+        progress: 0,
+        stage: "DetectingFormat" as ConversionStage,
+        error: null,
+        createdAt: Date.now(),
+        completedAt: null,
+      };
+    });
+    set((state) => ({ tasks: [...state.tasks, ...newTasks] }));
+    return newTasks;
+  },
 
   updateTaskProgress: (taskId, progress, stage) =>
     set((state) => ({
@@ -84,6 +90,22 @@ export const useTaskStore = create<TaskStore>((set) => ({
               completedAt: Date.now(),
             }
           : t
+      ),
+    })),
+
+  finalizeTask: (placeholderId, taskId, result, error) =>
+    set((state) => ({
+      tasks: state.tasks.map((t) =>
+        t.id !== placeholderId
+          ? t
+          : {
+              ...t,
+              id: taskId,
+              status: error ? ("Failed" as TaskStatus) : ("Completed" as TaskStatus),
+              progress: error ? t.progress : 1,
+              error,
+              completedAt: Date.now(),
+            }
       ),
     })),
 

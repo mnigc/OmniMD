@@ -1,7 +1,8 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::converters::get_converter;
+use crate::file_utils;
 use crate::models::converter::Converter;
 use crate::models::{
     document::Document,
@@ -64,7 +65,7 @@ pub async fn convert_file(task: &ConversionTask) -> Result<ConversionResult, Con
                 asset_dir.join(safe_name)
             };
 
-            let resolved_path = resolve_unique_file_path(asset_path);
+            let resolved_path = file_utils::resolve_unique_path(asset_path);
 
             fs::write(&resolved_path, &asset.bytes).map_err(|e| ConversionError {
                 code: ErrorCode::IoError,
@@ -78,64 +79,84 @@ pub async fn convert_file(task: &ConversionTask) -> Result<ConversionResult, Con
     Ok(result)
 }
 
-pub async fn convert_batch(
+pub async fn convert_batch<F>(
     tasks: Vec<ConversionTask>,
     concurrency: usize,
-) -> Vec<ConversionResult> {
+    mut on_task_completed: F,
+) -> Vec<ConversionResult>
+where
+    F: FnMut(&ConversionResult),
+{
     use futures::stream::{FuturesUnordered, StreamExt};
-
-    let mut futures: FuturesUnordered<tokio::task::JoinHandle<(String, ConversionResult)>> =
-        FuturesUnordered::new();
+    use std::collections::HashMap;
 
     let concurrency = concurrency.max(1);
+    let mut task_iter = tasks.into_iter().enumerate();
+    let mut futures: FuturesUnordered<
+        tokio::task::JoinHandle<(usize, String, Result<ConversionResult, ConversionError>)>,
+    > = FuturesUnordered::new();
 
-    for task in tasks {
-        let handle = tokio::spawn(async move {
-            let result = convert_file(&task).await;
-            match result {
-                Ok(r) => (task.id.clone(), r),
-                Err(err) => (
-                    task.id.clone(),
-                    ConversionResult {
-                        task_id: task.id,
-                        markdown: String::new(),
-                        document: Document::new("unknown", "unknown", 0),
-                        assets: Vec::new(),
-                        errors: vec![err],
-                    },
-                ),
-            }
-        });
-        futures.push(handle);
+    let spawn_task = |index: usize, task: ConversionTask| {
+        let task_id = task.id.clone();
+        tokio::spawn(async move {
+            let converted = convert_file(&task).await;
+            (index, task_id, converted)
+        })
+    };
+
+    for _ in 0..concurrency {
+        if let Some((index, task)) = task_iter.next() {
+            futures.push(spawn_task(index, task));
+        }
     }
 
-    let mut active = 0usize;
-    let mut results: Vec<ConversionResult> = Vec::with_capacity(concurrency);
+    let mut by_index: HashMap<usize, ConversionResult> = HashMap::new();
+    let mut unresolvable: Vec<ConversionResult> = Vec::new();
 
-    while active < concurrency {
-        active += 1;
-        if let Some(handle) = futures.next().await {
-            match handle {
-                Ok((_task_id, result)) => results.push(result),
-                Err(e) => {
-                    results.push(ConversionResult {
-                        task_id: String::new(),
-                        markdown: String::new(),
-                        document: Document::new("unknown", "unknown", 0),
-                        assets: Vec::new(),
-                        errors: vec![ConversionError {
-                            code: ErrorCode::IoError,
-                            message: format!("Task panicked: {}", e),
-                            stage: ConversionStage::Extracting,
-                            retryable: true,
-                        }],
-                    });
-                }
+    while let Some(handle) = futures.next().await {
+        match handle {
+            Ok((index, _, Ok(result))) => {
+                on_task_completed(&result);
+                by_index.insert(index, result);
+            }
+            Ok((index, task_id, Err(err))) => {
+                let result = ConversionResult {
+                    task_id,
+                    markdown: String::new(),
+                    document: Document::new("unknown", "unknown", 0),
+                    assets: Vec::new(),
+                    errors: vec![err],
+                };
+                on_task_completed(&result);
+                by_index.insert(index, result);
+            }
+            Err(e) => {
+                let result = ConversionResult {
+                    task_id: String::new(),
+                    markdown: String::new(),
+                    document: Document::new("unknown", "unknown", 0),
+                    assets: Vec::new(),
+                    errors: vec![ConversionError {
+                        code: ErrorCode::IoError,
+                        message: format!("Task panicked: {}", e),
+                        stage: ConversionStage::Extracting,
+                        retryable: true,
+                    }],
+                };
+                on_task_completed(&result);
+                unresolvable.push(result);
             }
         }
-        active -= 1;
+
+        if let Some((index, task)) = task_iter.next() {
+            futures.push(spawn_task(index, task));
+        }
     }
 
+    let mut ordered: Vec<(usize, ConversionResult)> = by_index.into_iter().collect();
+    ordered.sort_by_key(|(index, _)| *index);
+    let mut results: Vec<ConversionResult> = ordered.into_iter().map(|(_, r)| r).collect();
+    results.extend(unresolvable);
     results
 }
 
@@ -145,30 +166,48 @@ fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
-fn resolve_unique_file_path(initial: PathBuf) -> PathBuf {
-    if !initial.exists() {
-        return initial;
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
 
-    let parent = initial
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let stem = initial
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "asset".to_string());
-    let extension = initial
-        .extension()
-        .map(|s| format!(".{}", s.to_string_lossy()))
-        .unwrap_or_default();
+    #[tokio::test]
+    async fn convert_batch_processes_all_tasks_within_concurrency() {
+        let dir = std::env::temp_dir().join(format!(
+            "omnid_batch_src_{}",
+            std::process::id()
+        ));
+        let out = std::env::temp_dir().join(format!(
+            "omnid_batch_out_{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
 
-    let mut counter = 1;
-    loop {
-        let path = parent.join(format!("{}-{}{}", stem, counter, extension));
-        if !path.exists() {
-            return path;
+        let count = 8;
+        let mut tasks = Vec::new();
+        for i in 0..count {
+            let src = dir.join(format!("file{}.txt", i));
+            fs::write(&src, format!("content {}", i)).unwrap();
+            let output = out.join(format!("file{}.md", i));
+            tasks.push(ConversionTask::new(
+                src.to_str().unwrap(),
+                output.to_str().unwrap(),
+            ));
         }
-        counter += 1;
+
+        let results = convert_batch(tasks, 2, |_| {}).await;
+
+        fs::remove_dir_all(&dir).ok();
+        fs::remove_dir_all(&out).ok();
+
+        assert_eq!(results.len(), count, "all tasks must be consumed");
+        for (i, result) in results.iter().enumerate() {
+            assert!(result.errors.is_empty(), "task {} should succeed", i);
+            assert!(
+                result.markdown.contains(&format!("content {}", i)),
+                "task {} result should match input order",
+                i
+            );
+        }
     }
 }

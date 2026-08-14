@@ -13,6 +13,7 @@ import {
 import { DropZone } from "../components/DropZone";
 import { TaskItem } from "../components/TaskItem";
 import { convertBatch, convertFile, getSupportedFormats } from "../api/tauriApi";
+import { pickFiles, pickOutputDir } from "../api/dialogs";
 import { useTaskStore } from "../store/useTaskStore";
 type Page = "home" | "convert" | "batch" | "settings";
 
@@ -24,7 +25,7 @@ export function HomePage({ onNavigate }: HomePageProps) {
   const {
     tasks,
     addTasks,
-    completeTask,
+    finalizeTask,
     failTask,
     clearCompleted,
     setCurrentTask,
@@ -44,22 +45,19 @@ export function HomePage({ onNavigate }: HomePageProps) {
       if (paths.length === 0) return;
 
       const dir = outputDir || paths[0].replace(/\\/g, "/").split("/").slice(0, -1).join("/");
-      addTasks(paths, dir);
+      const placeholders = addTasks(paths, dir);
+
+      setConverting(true);
 
       if (paths.length === 1) {
-        setConverting(true);
-        const task = tasks.find(
-          (t) => t.sourcePath === paths[0]
-        ) || addTasks(paths, dir);
-
         try {
           const result = await convertFile(paths[0], dir);
-          completeTask(result.taskId, result);
+          finalizeTask(placeholders[0].id, result.taskId, result, null);
           setCurrentTask(
             {
               id: result.taskId,
               sourcePath: paths[0],
-              outputPath: "",
+              outputPath: `${dir}/${paths[0].split(/[\\/]/).pop()}`,
               status: "Completed",
               progress: 1,
               stage: "Saving",
@@ -71,21 +69,24 @@ export function HomePage({ onNavigate }: HomePageProps) {
           );
           onNavigate("convert");
         } catch (err: any) {
-          failTask(tasks[tasks.length - 1]?.id || "", err.message || String(err));
+          failTask(placeholders[0]?.id || "", err.message || String(err));
         } finally {
           setConverting(false);
         }
       } else {
-        setConverting(true);
         try {
           const batchResult = await convertBatch(paths, dir, concurrency);
 
-          batchResult.results.forEach((r) => {
+          batchResult.results.forEach((r, index) => {
+            const placeholder = placeholders[index];
+            if (!placeholder) return;
             if (r.success) {
-              completeTask(r.taskId, r);
+              finalizeTask(placeholder.id, r.taskId, r, null);
             } else {
-              failTask(
+              finalizeTask(
+                placeholder.id,
                 r.taskId,
+                r,
                 r.errors[0]?.message || "Unknown error"
               );
             }
@@ -95,14 +96,28 @@ export function HomePage({ onNavigate }: HomePageProps) {
             onNavigate("batch");
           }
         } catch (err: any) {
-          failTask("", err.message || String(err));
+          placeholders.forEach((p) =>
+            failTask(p.id, err.message || String(err))
+          );
         } finally {
           setConverting(false);
         }
       }
     },
-    [tasks, addTasks, completeTask, failTask, setCurrentTask, onNavigate, outputDir, concurrency]
+    [addTasks, finalizeTask, failTask, setCurrentTask, onNavigate, outputDir, concurrency]
   );
+
+  const handleBrowseOutputDir = useCallback(async () => {
+    const dir = await pickOutputDir();
+    if (dir) setOutputDir(dir);
+  }, []);
+
+  const handleAddFiles = useCallback(async () => {
+    const paths = await pickFiles(supportedFormats);
+    if (paths.length > 0) {
+      handleFiles(paths);
+    }
+  }, [handleFiles, supportedFormats]);
 
   const totalTasks = tasks.length;
   const completedTasks = tasks.filter((t) => t.status === "Completed").length;
@@ -134,7 +149,10 @@ export function HomePage({ onNavigate }: HomePageProps) {
                 placeholder="Output directory (e.g. /home/user/output)"
                 className="flex-1 px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500"
               />
-              <button className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white text-sm rounded-md hover:bg-slate-800 transition-colors">
+              <button
+                onClick={handleBrowseOutputDir}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white text-sm rounded-md hover:bg-slate-800 transition-colors"
+              >
                 <FolderOpen size={14} />
                 Browse
               </button>
@@ -148,6 +166,7 @@ export function HomePage({ onNavigate }: HomePageProps) {
 
             <div className="flex items-center gap-3">
               <button
+                onClick={handleAddFiles}
                 disabled={converting}
                 className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white text-sm rounded-md hover:bg-violet-700 disabled:opacity-50 transition-colors"
               >

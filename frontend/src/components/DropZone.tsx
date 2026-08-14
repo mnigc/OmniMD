@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { FileUp, FolderOpen, Upload, X } from "lucide-react";
+import { useCallback, useState } from "react";
+import { FileUp, Upload, X } from "lucide-react";
+import { pickFiles } from "../api/dialogs";
+import { cn } from "../lib/utils";
 
 interface DropZoneProps {
   onFiles: (paths: string[]) => void;
@@ -7,81 +9,19 @@ interface DropZoneProps {
   formats: string[];
 }
 
-function isSupportedFile(file: File, formats: string[]): boolean {
-  if (formats.length === 0) return true;
-  const ext = file.name.split(".").pop()?.toLowerCase();
-  return ext ? formats.includes(ext) : false;
-}
-
-function walkDirectory(
-  entry: FileSystemEntry,
-  formats: string[]
-): Promise<string[]> {
-  return new Promise((resolve) => {
-    const results: string[] = [];
-
-    if (entry.isFile) {
-      const fileEntry = entry as FileSystemFileEntry;
-      const name = fileEntry.name;
-      const ext = name.split(".").pop()?.toLowerCase();
-      if (!ext || !formats.includes(ext)) {
-        resolve(results);
-        return;
-      }
-      results.push(name);
-      resolve(results);
-      return;
-    }
-
-    if (entry.isDirectory) {
-      const dirReader = (entry as FileSystemDirectoryEntry)
-        .createReader();
-      const entries: FileSystemEntry[] = [];
-
-      const readBatch = () => {
-        dirReader.readEntries((batch) => {
-          if (batch.length === 0) {
-            const promises = entries.map((e) =>
-              walkDirectory(e, formats)
-            );
-            Promise.all(promises).then((allResults) => {
-              allResults.flat().forEach((r) => results.push(r));
-              resolve(results);
-            });
-            return;
-          }
-          entries.push(...batch);
-          readBatch();
-        });
-      };
-
-      readBatch();
-      return;
-    }
-
-    resolve(results);
-  });
-}
-
 export function DropZone({ onFiles, disabled, formats }: DropZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [dragCount, setDragCount] = useState(0);
-  const [filePaths, setFilePaths] = useState<string[]>([]);
-  const dropRef = useRef<HTMLDivElement>(null);
+  const [selectedCount, setSelectedCount] = useState(0);
 
-  const processFiles = useCallback(
-    (entries: FileSystemEntry[]) => {
-      const promises = entries.map((e) => walkDirectory(e, formats));
-      Promise.all(promises).then((results) => {
-        const allPaths = results.flat();
-        setFilePaths(allPaths);
-        if (allPaths.length > 0) {
-          onFiles(allPaths);
-        }
-      });
-    },
-    [formats, onFiles]
-  );
+  const openFilePicker = useCallback(async () => {
+    if (disabled) return;
+    const paths = await pickFiles(formats);
+    if (paths.length > 0) {
+      setSelectedCount(paths.length);
+      onFiles(paths);
+    }
+  }, [disabled, formats, onFiles]);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -110,54 +50,38 @@ export function DropZone({ onFiles, disabled, formats }: DropZoneProps) {
       e.stopPropagation();
       setIsDragging(false);
       setDragCount(0);
-
-      const items = Array.from(e.dataTransfer.items || []);
-      const entries: FileSystemEntry[] = [];
-
-      for (const item of items) {
-        const entry = (item as any).webkitGetAsEntry?.();
-        if (entry) {
-          entries.push(entry);
-        }
-      }
-
-      if (entries.length > 0) {
-        processFiles(entries);
-        return;
-      }
-
-      const files = Array.from(e.dataTransfer.files || []);
-      const validPaths = files
-        .filter((f) => isSupportedFile(f, formats))
-        .map((f) => f.name);
-
-      if (validPaths.length > 0) {
-        setFilePaths(validPaths);
-        onFiles(validPaths);
-      }
+      // Browser sandboxing prevents access to full file paths from dropped
+      // files, so open the native file dialog to resolve real paths.
+      openFilePicker();
     },
-    [processFiles, formats, onFiles]
+    [openFilePicker]
   );
 
   return (
     <div
-      ref={dropRef}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-      className={`relative flex flex-col items-center justify-center p-8 rounded-xl border-2 border-dashed transition-all duration-200 ${
+      onClick={openFilePicker}
+      role="button"
+      aria-disabled={disabled}
+      className={cn(
+        "relative flex flex-col items-center justify-center p-8 rounded-xl border-2 border-dashed transition-all duration-200 cursor-pointer",
         disabled
           ? "border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed"
           : isDragging
             ? "border-violet-500 bg-violet-50/50 scale-[1.01] shadow-lg shadow-violet-100"
             : "border-slate-300 bg-slate-50/50 hover:border-slate-400 hover:bg-slate-100/50"
-      }`}
+      )}
     >
       <div
-        className={`mb-4 p-4 rounded-full transition-colors ${
-          isDragging ? "bg-violet-100 text-violet-600" : "bg-slate-200 text-slate-500"
-        }`}
+        className={cn(
+          "mb-4 p-4 rounded-full transition-colors",
+          isDragging
+            ? "bg-violet-100 text-violet-600"
+            : "bg-slate-200 text-slate-500"
+        )}
       >
         {disabled ? (
           <X size={28} />
@@ -172,18 +96,18 @@ export function DropZone({ onFiles, disabled, formats }: DropZoneProps) {
         {disabled
           ? "Drop disabled"
           : isDragging
-            ? "Drop files to convert"
-            : "Drop files or folders here"}
+            ? "Release to open file picker"
+            : "Drop files here or click to browse"}
       </p>
       <p className="text-sm text-muted-foreground text-center">
         Supported: DOCX, PDF, PPTX, XLSX, EPUB, CSV, TXT, HTML, RTF, ODT...
       </p>
 
-      {filePaths.length > 0 && (
+      {selectedCount > 0 && (
         <div className="mt-4 flex items-center gap-2 px-3 py-1.5 bg-green-50 border border-green-200 rounded-md">
           <CheckmarkIcon className="text-green-600" size={14} />
           <span className="text-xs text-green-700">
-            {filePaths.length} file{filePaths.length > 1 ? "s" : ""} detected
+            {selectedCount} file{selectedCount > 1 ? "s" : ""} selected
           </span>
         </div>
       )}
@@ -191,9 +115,16 @@ export function DropZone({ onFiles, disabled, formats }: DropZoneProps) {
   );
 }
 
-function CheckmarkIcon({ size }: { size: number }) {
+function CheckmarkIcon({
+  size,
+  className,
+}: {
+  size: number;
+  className?: string;
+}) {
   return (
     <svg
+      className={className}
       width={size}
       height={size}
       viewBox="0 0 24 24"

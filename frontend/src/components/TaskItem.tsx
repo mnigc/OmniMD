@@ -9,6 +9,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import type { ConversionTask } from "../types";
+import { cn } from "../lib/utils";
 
 interface TaskItemProps {
   task: ConversionTask;
@@ -65,11 +66,13 @@ export function TaskItem({ task, compact }: TaskItemProps) {
 
   return (
     <div
-      className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
+      className={cn(
+        "flex items-center gap-3 p-3 rounded-lg border transition-colors",
         compact
           ? "p-2 border-transparent hover:bg-slate-50"
-          : "border-slate-200 hover:border-slate-300 bg-white"
-      } ${task.status === "Failed" ? "border-red-200 bg-red-50/30" : ""}`}
+          : "border-slate-200 hover:border-slate-300 bg-white",
+        task.status === "Failed" ? "border-red-200 bg-red-50/30" : ""
+      )}
     >
       <div className="shrink-0">
         {getStatusIcon(task.status)}
@@ -107,7 +110,8 @@ export function TaskItem({ task, compact }: TaskItemProps) {
 
       <div className="flex items-center gap-1 shrink-0">
         <span
-          className={`text-[10px] px-2 py-0.5 rounded font-medium ${
+          className={cn(
+            "text-[10px] px-2 py-0.5 rounded font-medium",
             task.status === "Processing"
               ? "bg-blue-100 text-blue-700"
               : task.status === "Completed"
@@ -117,7 +121,7 @@ export function TaskItem({ task, compact }: TaskItemProps) {
                   : task.status === "Cancelled"
                     ? "bg-slate-100 text-slate-600"
                     : "bg-slate-100 text-slate-500"
-          }`}
+          )}
         >
           {statusLabel}
         </span>

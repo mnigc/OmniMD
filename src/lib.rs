@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::collections::HashMap;
 
 use models::converter::Converter;
-use models::task::{ConversionError, ConversionResult, ConversionTask, TaskStatus, ErrorCode};
+use models::task::{ConversionError, ConversionResult, ConversionTask, TaskStatus};
 use models::ConversionStage;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -59,6 +59,9 @@ pub struct ConverterInfo {
 }
 
 struct AppState {
+    // std::sync::Mutex is intentional here: the lock is held only for
+    // short, synchronous inserts/lookups, so it does not block the tokio
+    // runtime for any meaningful amount of time.
     tasks: Mutex<HashMap<String, ConversionTask>>,
 }
 
@@ -172,9 +175,47 @@ async fn convert_batch(
     let state = get_state(&app)?;
     for task in &tasks {
         state.tasks.lock().unwrap().insert(task.id.clone(), task.clone());
+        emit_status(&app, task);
     }
 
-    let results = pipeline::convert_batch(tasks, concurrency.max(1)).await;
+    let app_handle = app.clone();
+    let results = pipeline::convert_batch(tasks, concurrency.max(1), move |result| {
+        let success = result.errors.is_empty();
+        let status = if success {
+            TaskStatus::Completed
+        } else {
+            TaskStatus::Failed
+        };
+        let error_msg = result.errors.first().map(|e| e.message.clone());
+
+        if let Some(state) = get_state(&app_handle).ok() {
+            let mut guard = state.tasks.lock().unwrap();
+            if let Some(task) = guard.get_mut(&result.task_id) {
+                task.progress = 1.0;
+                task.stage = ConversionStage::Saving;
+                task.status = status.clone();
+                task.error = error_msg.clone();
+            }
+        }
+
+        let _ = app_handle.emit(
+            "task-progress",
+            TaskProgressDto {
+                task_id: result.task_id.clone(),
+                progress: 1.0,
+                stage: "Saving".to_string(),
+            },
+        );
+        let _ = app_handle.emit(
+            "task-status",
+            TaskStatusDto {
+                task_id: result.task_id.clone(),
+                status: format!("{:?}", status),
+                error: error_msg,
+            },
+        );
+    })
+    .await;
 
     let dtos: Vec<ConversionResultDto> = results.iter().map(result_to_dto).collect();
     let completed = dtos.iter().filter(|r| r.success).count();
@@ -211,6 +252,7 @@ fn preview_markdown(markdown: String) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             tasks: Mutex::new(HashMap::new()),
         })

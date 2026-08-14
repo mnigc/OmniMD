@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Copy,
   FileDown,
@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { MarkdownPreview } from "../components/MarkdownPreview";
 import { useTaskStore } from "../store/useTaskStore";
+import { cn } from "../lib/utils";
 
 export function ConvertPage() {
   const { currentTask, currentResult } = useTaskStore();
@@ -20,6 +21,12 @@ export function ConvertPage() {
   );
   const [markdown, setMarkdown] = useState("");
   const [outputPath, setOutputPath] = useState("");
+
+  useEffect(() => {
+    if (currentResult?.markdown) {
+      setMarkdown(currentResult.markdown);
+    }
+  }, [currentResult]);
 
   if (!currentTask || !currentResult) {
     return (
@@ -50,11 +57,12 @@ export function ConvertPage() {
             onClick={() =>
               setViewMode(viewMode === "split" ? "edit" : "split")
             }
-            className={`p-1.5 rounded transition-colors ${
+            className={cn(
+              "p-1.5 rounded transition-colors",
               viewMode === "edit"
                 ? "bg-violet-100 text-violet-700"
                 : "hover:bg-slate-100 text-muted-foreground"
-            }`}
+            )}
             title="Edit only"
           >
             <Code size={16} />
@@ -63,22 +71,24 @@ export function ConvertPage() {
             onClick={() =>
               setViewMode(viewMode === "split" ? "preview" : "split")
             }
-            className={`p-1.5 rounded transition-colors ${
+            className={cn(
+              "p-1.5 rounded transition-colors",
               viewMode === "preview"
                 ? "bg-violet-100 text-violet-700"
                 : "hover:bg-slate-100 text-muted-foreground"
-            }`}
+            )}
             title="Preview only"
           >
             <Eye size={16} />
           </button>
           <button
             onClick={() => setViewMode("split")}
-            className={`p-1.5 rounded transition-colors ${
+            className={cn(
+              "p-1.5 rounded transition-colors",
               viewMode === "split"
                 ? "bg-violet-100 text-violet-700"
                 : "hover:bg-slate-100 text-muted-foreground"
-            }`}
+            )}
             title="Split view"
           >
             <LayoutTemplate size={16} />

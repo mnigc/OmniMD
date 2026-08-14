@@ -34,11 +34,13 @@ pub fn get_output_path(input_path: &str, output_dir: &str) -> String {
 
     let output = Path::new(output_dir).join(format!("{}.md", file_stem));
     resolve_unique_path(output)
+        .to_string_lossy()
+        .to_string()
 }
 
-fn resolve_unique_path(initial: PathBuf) -> String {
+pub fn resolve_unique_path(initial: PathBuf) -> PathBuf {
     if !initial.exists() {
-        return initial.to_string_lossy().to_string();
+        return initial;
     }
 
     let parent = initial
@@ -63,7 +65,7 @@ fn resolve_unique_path(initial: PathBuf) -> String {
             format!("{}.{}", new_name, extension)
         });
         if !path.exists() {
-            return path.to_string_lossy().to_string();
+            return path;
         }
         counter += 1;
     }

@@ -11,6 +11,7 @@ import { HomePage } from "./pages/HomePage";
 import { ConvertPage } from "./pages/ConvertPage";
 import { BatchPage } from "./pages/BatchPage";
 import { useTaskStore } from "./store/useTaskStore";
+import { cn } from "./lib/utils";
 
 type Page = "home" | "convert" | "batch" | "settings";
 
@@ -92,11 +93,12 @@ export function App() {
                 <button
                   key={item.id}
                   onClick={() => setPage(item.id)}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
                     page === item.id
                       ? "bg-violet-100 text-violet-700 font-medium"
                       : "hover:bg-slate-200 text-slate-600"
-                  }`}
+                  )}
                 >
                   {item.icon}
                   <span>{item.label}</span>

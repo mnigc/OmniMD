@@ -18,7 +18,6 @@ src-tauri/build/
 frontend/node_modules/
 frontend/dist/
 frontend/.pnpm-store/
-pnpm-lock.yaml
 package-lock.json
 yarn.lock
 

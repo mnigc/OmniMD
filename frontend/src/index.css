@@ -1,3 +1,81 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.prose h1 {
+  color: hsl(222.2 47.4% 11.2%);
+  font-weight: 700;
+  font-size: 3rem;
+  line-height: 1;
+  letter-spacing: -0.01562em;
+}
+
+.prose h2 {
+  color: hsl(222.2 47.4% 11.2%);
+  font-weight: 600;
+  font-size: 1.5rem;
+  line-height: 2rem;
+  letter-spacing: -0.025em;
+}
+
+.prose h3 {
+  color: hsl(222.2 47.4% 11.2%);
+  font-weight: 500;
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+}
+
+.prose h4 {
+  color: hsl(222.2 47.4% 11.2%);
+  font-weight: 500;
+  font-size: 1rem;
+  line-height: 1.5rem;
+}
+
+.prose p {
+  color: hsl(215.4 16.3% 46.9%);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.prose table {
+  color: hsl(222.2 47.4% 11.2%);
+  border: 1px solid hsl(214.3 31.8% 91.4%);
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.prose thead {
+  display: table-header-group;
+  background-color: hsl(210 40% 96.1%);
+}
+
+.prose th {
+  color: hsl(222.2 47.4% 11.2%);
+  font-weight: 500;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid hsl(214.3 31.8% 91.4%);
+  text-align: left;
+}
+
+.prose td {
+  color: hsl(215.4 16.3% 46.9%);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid hsl(214.3 31.8% 91.4%);
+}
+
+.prose tbody {
+  display: table-row-group;
+}
+
+.prose tr {
+  display: table-row;
+}
+
+.prose td,
+.prose th {
+  display: table-cell;
+}
