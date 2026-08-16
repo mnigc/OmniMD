@@ -51,7 +51,6 @@ ehthumbs.db
 
 # ===== PoC / experiments (large local test data, not for the repo) =====
 poc/
-docs/
 
 # ===== OCR resources (models downloaded/generated locally) =====
 ocr_resources/
