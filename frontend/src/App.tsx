@@ -3,12 +3,14 @@ import {
   Eye,
   Clock,
   Home,
+  LibraryBig,
   PanelLeft,
   Settings,
 } from "lucide-react";
 import { HomePage } from "./pages/HomePage";
 import { ConvertPage } from "./pages/ConvertPage";
 import { HistoryPage } from "./pages/HistoryPage";
+import { LibraryPage } from "./pages/LibraryPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useI18n } from "./i18n";
 import {
@@ -22,7 +24,7 @@ import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
 import { ToastPortal } from "./lib/toast";
 
-type Page = "home" | "convert" | "history" | "settings";
+type Page = "home" | "library" | "convert" | "history" | "settings";
 
 export function App() {
   const { t } = useI18n();
@@ -43,6 +45,8 @@ export function App() {
     switch (page) {
       case "home":
         return <HomePage />;
+      case "library":
+        return <LibraryPage />;
       case "convert":
         return <ConvertPage onNavigate={setPage} />;
       case "history":
@@ -93,6 +97,12 @@ export function App() {
               label={t("nav.home")}
               active={page === "home"}
               onClick={() => setPage("home")}
+            />
+            <SidebarNavItem
+              icon={<LibraryBig size={16} />}
+              label={t("nav.library")}
+              active={page === "library"}
+              onClick={() => setPage("library")}
             />
             <SidebarNavItem
               icon={<Clock size={16} />}

@@ -7,6 +7,7 @@ import {
   Link,
   Loader2,
   Play,
+  RotateCcw,
   Trash2,
   X,
   XCircle,
@@ -55,6 +56,7 @@ export function HomePage() {
     clearSession,
     startConversion,
     cancelConversion,
+    retryFailed,
   } = useTaskStore();
   const { outputMode, defaultOutputDir } = useSettingsStore();
 
@@ -395,12 +397,22 @@ export function HomePage() {
                     {t("home.cancel")}
                   </Button>
                 ) : (
-                  <Button
-                    onClick={handleStart}
-                    disabled={pendingCount === 0}
-                  >
+                    <Button
+                      onClick={handleStart}
+                      disabled={pendingCount === 0}
+                    >
                     <Play size={16} />
                     {t("home.startConversion")}
+                  </Button>
+                )}
+                {failedCount > 0 && !sessionConverting && (
+                  <Button
+                    variant="outline"
+                    onClick={retryFailed}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    <RotateCcw size={16} />
+                    {t("batch.retryFailed")}
                   </Button>
                 )}
                 <Button

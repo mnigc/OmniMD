@@ -74,6 +74,8 @@ interface TaskStore {
   ) => void;
   startConversion: () => Promise<void>;
   cancelConversion: () => Promise<void>;
+  /* Re-enqueue every Failed task as Pending and restart conversion. */
+  retryFailed: () => Promise<void>;
 
   addToHistory: (entry: HistoryEntry) => void;
   loadHistory: () => void;
@@ -112,7 +114,7 @@ function makeTask(
     outputMode,
     status: "Pending",
     progress: 0,
-    stage: "DetectingFormat",
+    stage: "Queued",
     error: null,
     createdAt: Date.now(),
     completedAt: null,
@@ -226,7 +228,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     }
 
     const aiReadyOpts = useSettingsStore.getState().buildAiReadyOpts();
-    const ocrMode = useSettingsStore.getState().ocrMode;
+    const parseQuality = useSettingsStore.getState().parseQuality;
     const maxInFlight = CONVERSION_CONCURRENCY;
     let nextIndex = 0;
 
@@ -263,7 +265,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
                 task.outputDir,
                 task.outputMode,
                 aiReadyOpts,
-                ocrMode,
+                parseQuality,
                 task.id
               );
           // The task may have been cancelled/removed while the conversion ran.
@@ -363,6 +365,22 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     // Clear the session list: the user explicitly chose to cancel, so
     // cancelled entries should not linger in the queue.
     set({ sessionTasks: [], sessionConverting: false, sessionCancelling: false });
+  },
+
+  retryFailed: async () => {
+    if (get().sessionConverting) return;
+    const { sessionTasks } = get();
+    const failed = sessionTasks.filter((t) => t.status === "Failed");
+    if (failed.length === 0) return;
+
+    set((state) => ({
+      sessionTasks: state.sessionTasks.map((t) =>
+        t.status === "Failed"
+          ? { ...t, status: "Pending", progress: 0, stage: "Queued", error: null, completedAt: null }
+          : t,
+      ),
+    }));
+    await get().startConversion();
   },
 
   addToHistory: (entry) => {

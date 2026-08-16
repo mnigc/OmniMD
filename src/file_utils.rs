@@ -7,8 +7,11 @@ pub enum InputType {
     Url,
 }
 
+// M0 (2026-08-16): verified against MinerU 3.4.5 — `.xls` is rejected with
+// `400 Unsupported file type: xls` (only `.xlsx` is supported via openpyxl),
+// so `.xls` is intentionally excluded from the supported list.
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "pdf", "docx", "doc", "pptx", "ppt", "xlsx", "xls", "epub", "csv", "txt", "html", "htm",
+    "pdf", "docx", "doc", "pptx", "ppt", "xlsx", "epub", "csv", "txt", "html", "htm",
     "odt", "ods", "odp", "rtf", "png", "jpg", "jpeg", "tiff", "tif", "bmp",
 ];
 

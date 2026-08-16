@@ -13,23 +13,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
-anydoc = "0.1"
 uuid = { version = "1", features = ["v4"] }
 serde = { version = "1", features = ["derive"] }
-tempfile = "3"
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
-pdf-inspector = "1.14.2"
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+async-trait = "0.1"
 chrono = "0.4"
 scraper = "0.22"
-lopdf = "0.42"
-oar-ocr = "0.9"
-once_cell = "1"
-pdfium-bundled = "0.1"
-pdfium-render = "0.9"
-image = "0.25"
+# SQLite bundled: compiles SQLite from source on every platform, ships FTS5
+# out of the box (no system SQLite required on Windows).
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tracing-subscriber = "0.3"

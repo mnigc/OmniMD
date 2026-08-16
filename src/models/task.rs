@@ -2,7 +2,6 @@
 use std::time::SystemTime;
 
 use super::document::{Asset, Document};
-use super::ocr::OcrMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskStatus {
@@ -13,14 +12,15 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+/// Task-level progress stages surfaced to the UI. MinerU's HTTP API reports
+/// task-level status only (no per-page progress), so stages are coarse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ConversionStage {
+    Queued,
     Fetching,
-    DetectingFormat,
-    Extracting,
-    Ocr,
-    Structuring,
-    Serializing,
+    ModelLoading,
+    Parsing,
+    PostProcessing,
     Saving,
 }
 
@@ -29,7 +29,8 @@ pub enum ErrorCode {
     Unsupported,
     Encrypted,
     Malformed,
-    OcrFailed,
+    EngineError,
+    RuntimeNotReady,
     IoError,
     Cancelled,
 }
@@ -58,18 +59,55 @@ impl OutputMode {
     }
 }
 
+/// User-facing parse quality. Mapped internally to MinerU `backend`/`method`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ParseQuality {
+    /// Let the engine decide based on hardware and document type.
+    Auto,
+    /// Speed first (MinerU `pipeline` backend; the only option on pure CPU).
+    Quick,
+    /// Best fidelity (MinerU `vlm-engine` / `hybrid-engine`; requires GPU).
+    High,
+}
+
+impl Default for ParseQuality {
+    fn default() -> Self {
+        ParseQuality::Auto
+    }
+}
+
+impl ParseQuality {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "quick" => ParseQuality::Quick,
+            "high" => ParseQuality::High,
+            _ => ParseQuality::Auto,
+        }
+    }
+
+    /// MinerU backend for this quality level.
+    pub fn mineru_backend(&self) -> &'static str {
+        match self {
+            ParseQuality::Quick => "pipeline",
+            ParseQuality::High => "vlm-engine",
+            ParseQuality::Auto => "hybrid-engine",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionError {
     pub code: ErrorCode,
     pub message: String,
     pub stage: ConversionStage,
     pub retryable: bool,
-    /// 1-based page number this error originated from (for per-page OCR failures).
+    /// 1-based page number this error originated from (for per-page failures).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<u32>,
 }
 
-/// Statistics about a single conversion, computed by `pipeline::convert_file`.
+/// Statistics about a single conversion, computed by the pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConversionStats {
     /// Number of image references (`![..]( ... )`) in the markdown,
@@ -80,18 +118,6 @@ pub struct ConversionStats {
     /// Number of words in the output markdown.
     /// For CJK scripts counts characters, for Latin scripts counts words.
     pub word_count: usize,
-    /// Number of pages processed by OCR (0 if OCR was not used).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ocr_page_count: Option<usize>,
-    /// Total characters recognized by OCR.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ocr_char_count: Option<usize>,
-    /// Average confidence per mille (0-1000) of OCR results.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub avg_confidence_permille: Option<u32>,
-    /// Number of low-confidence blocks (< 0.5).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub low_confidence_count: Option<usize>,
 }
 
 /// Options controlling the AI Ready formatter (see `markdown_pipeline`).
@@ -120,7 +146,7 @@ pub struct ConversionTask {
     #[serde(default)]
     pub ai_ready_opts: AiReadyOpts,
     #[serde(default)]
-    pub ocr_mode: OcrMode,
+    pub parse_quality: ParseQuality,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,7 +161,7 @@ pub struct ConversionResult {
     #[serde(default)]
     pub output_path: String,
     /// Conversion statistics. `None` when not yet computed (e.g. errors that
-    /// short-circuited before `convert_file` could measure anything).
+    /// short-circuited before the pipeline could measure anything).
     #[serde(default)]
     pub stats: Option<ConversionStats>,
 }
@@ -157,13 +183,13 @@ impl ConversionTask {
             output_path: output_path.to_string(),
             status: TaskStatus::Pending,
             progress: 0.0,
-            stage: ConversionStage::DetectingFormat,
+            stage: ConversionStage::Queued,
             error: None,
             created_at: now,
             completed_at: None,
             output_mode: mode,
             ai_ready_opts: AiReadyOpts::default(),
-            ocr_mode: OcrMode::default(),
+            parse_quality: ParseQuality::default(),
         }
     }
 }

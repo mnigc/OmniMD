@@ -1,4 +1,5 @@
-﻿import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Sparkles } from "lucide-react";
+﻿import { useCallback, useEffect, useState } from "react";
+import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Sparkles, Cpu } from "lucide-react";
 import { useI18n } from "../i18n";
 import { type ThemeMode } from "../lib/theme";
 import { useThemeMode } from "../hooks/useThemeMode";
@@ -8,8 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
-import { useSettingsStore, type OcrMode } from "../store/useSettingsStore";
+import { useSettingsStore } from "../store/useSettingsStore";
+import { mineruStatus, startMineru, type MineruStatus } from "../api/tauriApi";
 import { pickOutputDir } from "../api/dialogs";
+import type { ParseQuality } from "../types";
 
 const themeOptions: {
   value: ThemeMode;
@@ -74,8 +77,8 @@ export function SettingsPage() {
   const { t } = useI18n();
   const { theme, setMode } = useThemeMode();
   const {
-    ocrMode,
-    setOcrMode,
+    parseQuality,
+    setParseQuality,
     defaultOutputDir,
     recursive,
     keepStructure,
@@ -89,6 +92,38 @@ export function SettingsPage() {
     setAiReadyToc,
     setAiReadyMeta,
   } = useSettingsStore();
+
+  const [mineruInfo, setMineruInfo] = useState<MineruStatus | null>(null);
+  const [mineruStarting, setMineruStarting] = useState(false);
+  const [mineruError, setMineruError] = useState<string | null>(null);
+
+  const refreshMineruStatus = useCallback(async () => {
+    try {
+      const info = await mineruStatus();
+      setMineruInfo(info);
+      setMineruError(null);
+    } catch (e) {
+      setMineruInfo(null);
+      setMineruError(String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshMineruStatus();
+  }, [refreshMineruStatus]);
+
+  const handleStartMineru = async () => {
+    setMineruStarting(true);
+    setMineruError(null);
+    try {
+      await startMineru();
+      await refreshMineruStatus();
+    } catch (e) {
+      setMineruError(String(e));
+    } finally {
+      setMineruStarting(false);
+    }
+  };
 
   const handleBrowseOutputDir = async () => {
     const dir = await pickOutputDir();
@@ -162,26 +197,65 @@ export function SettingsPage() {
               />
               <div className="py-2.5">
                 <span className="text-sm text-muted-foreground block mb-2">
-                  {t("settings.ocr")}
+                  {t("settings.parseQuality")}
                 </span>
                 <div className="flex gap-2">
-                  {(["auto", "off", "always"] as OcrMode[]).map((mode) => (
+                  {(["auto", "quick", "high"] as ParseQuality[]).map((mode) => (
                     <button
                       key={mode}
-                      onClick={() => setOcrMode(mode)}
+                      onClick={() => setParseQuality(mode)}
                       className={cn(
                         "flex-1 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
-                        ocrMode === mode
+                        parseQuality === mode
                           ? "border-primary bg-accent text-accent-foreground"
                           : "border-input text-muted-foreground hover:bg-accent/50"
                       )}
                     >
-                      {t(`settings.ocrMode.${mode}`)}
+                      {t(`settings.parseQualityMode.${mode}`)}
                     </button>
                   ))}
                 </div>
                 <span className="text-xs text-muted-foreground/70 mt-1.5 block">
-                  {t("settings.ocrDesc")}
+                  {t("settings.parseQualityDesc")}
+                </span>
+              </div>
+              <div className="py-2.5">
+                <span className="text-sm text-muted-foreground block mb-2">
+                  {t("settings.mineru")}
+                </span>
+                <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                  <div className="flex flex-col gap-1 min-w-0">
+                    <span className="text-sm flex items-center gap-2">
+                      <Cpu size={14} className={cn(
+                        "shrink-0",
+                        mineruInfo?.healthy
+                          ? "text-emerald-500"
+                          : "text-muted-foreground"
+                      )} />
+                      {mineruInfo
+                        ? mineruInfo.healthy
+                          ? t("settings.mineruHealthy")
+                          : t("settings.mineruUnhealthy")
+                        : t("settings.mineruChecking")}
+                    </span>
+                    {mineruError && (
+                      <span className="text-xs text-destructive break-all">
+                        {mineruError}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    disabled={mineruStarting || mineruInfo?.healthy}
+                    onClick={handleStartMineru}
+                  >
+                    {mineruStarting
+                      ? t("settings.mineruStarting")
+                      : t("settings.mineruStart")}
+                  </Button>
+                </div>
+                <span className="text-xs text-muted-foreground/70 mt-1.5 block">
+                  {t("settings.mineruDesc")}
                 </span>
               </div>
             </div>

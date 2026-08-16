@@ -1,10 +1,9 @@
 pub mod models;
-pub mod converters;
+pub mod engine;
 pub mod file_utils;
-pub mod pipeline;
 pub mod markdown_pipeline;
 pub mod web_extractor;
-pub mod ocr;
+pub mod db;
 
 use std::sync::Mutex;
 use std::sync::Arc;
@@ -12,11 +11,16 @@ use std::collections::HashMap;
 use std::fs;
 use std::time::Duration;
 
-use models::converter::Converter;
-use models::ocr::{Cancellation, OcrMode, ProgressCallback};
+use db::{
+    db as db_handle, DocumentDto, FolderDto, ScanResultDto, SearchHitDto, WorkspaceDto,
+};
+use engine::mineru_engine::MinerUEngine;
+use engine::mineru_runtime::MinerURuntime;
+use engine::DocumentEngine;
+use models::ocr::{Cancellation, ProgressCallback};
 use models::task::{
     AiReadyOpts, ConversionError, ConversionResult, ConversionTask, ErrorCode, TaskStatus,
-    OutputMode,
+    OutputMode, ParseQuality,
 };
 use models::ConversionStage;
 use serde::{Deserialize, Serialize};
@@ -24,18 +28,11 @@ use tauri::{Emitter, Manager};
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversionStatsDto {
     pub image_count: usize,
     pub table_count: usize,
     pub word_count: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ocr_page_count: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ocr_char_count: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub avg_confidence_permille: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub low_confidence_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -57,6 +54,7 @@ impl From<&AiReadyOptsDto> for AiReadyOpts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversionResultDto {
     pub task_id: String,
     pub markdown: String,
@@ -76,6 +74,7 @@ pub struct ErrorDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskProgressDto {
     pub task_id: String,
     pub progress: f32,
@@ -85,6 +84,7 @@ pub struct TaskProgressDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskStatusDto {
     pub task_id: String,
     pub status: String,
@@ -100,6 +100,7 @@ pub struct ConverterInfo {
 struct AppState {
     tasks: Mutex<HashMap<String, ConversionTask>>,
     cancellations: Mutex<HashMap<String, Cancellation>>,
+    runtime: Mutex<Option<Arc<MinerURuntime>>>,
 }
 
 impl Default for AppState {
@@ -107,7 +108,21 @@ impl Default for AppState {
         AppState {
             tasks: Mutex::new(HashMap::new()),
             cancellations: Mutex::new(HashMap::new()),
+            runtime: Mutex::new(None),
         }
+    }
+}
+
+impl AppState {
+    /// Lazily create the MinerU runtime bound to a stable loopback port.
+    fn mineru_runtime(&self) -> Arc<MinerURuntime> {
+        let mut guard = self.runtime.lock().unwrap();
+        if let Some(r) = guard.as_ref() {
+            return r.clone();
+        }
+        let runtime = Arc::new(MinerURuntime::new(18628));
+        *guard = Some(runtime.clone());
+        runtime
     }
 }
 
@@ -117,10 +132,6 @@ fn result_to_dto(result: &ConversionResult) -> ConversionResultDto {
             image_count: s.image_count,
             table_count: s.table_count,
             word_count: s.word_count,
-            ocr_page_count: s.ocr_page_count,
-            ocr_char_count: s.ocr_char_count,
-            avg_confidence_permille: s.avg_confidence_permille,
-            low_confidence_count: s.low_confidence_count,
         },
         None => ConversionStatsDto::default(),
     };
@@ -178,14 +189,21 @@ async fn convert_file(
     output_dir: String,
     output_mode: Option<String>,
     ai_ready_opts: Option<AiReadyOptsDto>,
-    ocr_mode: Option<OcrMode>,
+    parse_quality: Option<String>,
     client_task_id: Option<String>,
 ) -> Result<ConversionResultDto, String> {
-    info!("convert_file: {} -> {} (mode={:?}, ocr={:?})", source_path, output_dir, output_mode, ocr_mode);
+    info!(
+        "convert_file: {} -> {} (mode={:?}, quality={:?})",
+        source_path, output_dir, output_mode, parse_quality
+    );
 
     let mode = output_mode
         .as_deref()
         .map(OutputMode::from_str)
+        .unwrap_or_default();
+    let quality = parse_quality
+        .as_deref()
+        .map(ParseQuality::from_str)
         .unwrap_or_default();
 
     let output_path = file_utils::get_output_path(&source_path, &output_dir);
@@ -200,10 +218,10 @@ async fn convert_file(
     if let Some(dto) = &ai_ready_opts {
         task.ai_ready_opts = AiReadyOpts::from(dto);
     }
-    task.ocr_mode = ocr_mode.unwrap_or_default();
+    task.parse_quality = quality;
     task.status = TaskStatus::Processing;
-    task.stage = ConversionStage::DetectingFormat;
-    task.progress = 0.1;
+    task.stage = ConversionStage::Queued;
+    task.progress = 0.05;
 
     let state = get_state(&app)?;
     let cancellation = Cancellation::new();
@@ -211,33 +229,32 @@ async fn convert_file(
     state.tasks.lock().unwrap().insert(task.id.clone(), task.clone());
     emit_progress(&app, &task);
 
-    task.stage = ConversionStage::Extracting;
-    task.progress = 0.4;
-    emit_progress(&app, &task);
-
     // Create a progress callback that emits events to the frontend.
-    // The callback receives values in [0, 1] and maps them to the [0.4, 0.95] range.
     let app_clone = app.clone();
     let task_id = task.id.clone();
     let progress_cb: ProgressCallback = Arc::new(move |p: f32, detail: Option<String>| {
-        let stage = if p < 0.05 {
-            "Extracting".to_string()
-        } else {
-            "Ocr".to_string()
-        };
-        let progress = 0.4 + p * 0.55; // map [0,1] → [0.4, 0.95]
         let _ = app_clone.emit(
             "task-progress",
             TaskProgressDto {
                 task_id: task_id.clone(),
-                progress,
-                stage,
+                progress: p,
+                stage: if p < 0.35 {
+                    "ModelLoading".to_string()
+                } else if p < 0.9 {
+                    "Parsing".to_string()
+                } else {
+                    "Saving".to_string()
+                },
                 detail,
             },
         );
     });
 
-    let result = match pipeline::convert_file(&task, Some(progress_cb), Some(&cancellation)).await {
+    let engine: Arc<dyn DocumentEngine> = Arc::new(MinerUEngine::new(state.mineru_runtime()));
+    let result = match engine
+        .convert(&task, Some(progress_cb), Some(&cancellation))
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             if e.code == ErrorCode::Cancelled || cancellation.cancelled() {
@@ -245,14 +262,14 @@ async fn convert_file(
                 task.error = Some("任务已取消".to_string());
                 emit_status(&app, &task);
                 cleanup_cancellation(&state, &task.id);
-    cleanup_task(&state, &task.id);
+                cleanup_task(&state, &task.id);
                 return Err("cancelled".to_string());
             }
             task.status = TaskStatus::Failed;
             task.error = Some(e.message.clone());
             emit_status(&app, &task);
             cleanup_cancellation(&state, &task.id);
-    cleanup_task(&state, &task.id);
+            cleanup_task(&state, &task.id);
             return Err(format!("[{:?}]: {}", e.code, e.message));
         }
     };
@@ -281,7 +298,7 @@ fn cleanup_task(state: &tauri::State<'_, AppState>, task_id: &str) {
 }
 
 /// Request cancellation of a running conversion task. The backend cooperatively
-/// stops at the next checkpoint (before writing files, between OCR pages, etc.).
+/// stops at the next checkpoint.
 #[tauri::command]
 fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
     let state = get_state(&app)?;
@@ -290,6 +307,121 @@ fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
         tracing::info!("Cancel requested for task {}", task_id);
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// M2 Workbench data layer commands (SQLite workspace DB)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn list_workspaces(app: tauri::AppHandle) -> Result<Vec<WorkspaceDto>, String> {
+    db_handle(&app)?.list_workspaces()
+}
+
+#[tauri::command]
+fn add_workspace(
+    app: tauri::AppHandle,
+    name: String,
+    path: String,
+) -> Result<WorkspaceDto, String> {
+    db_handle(&app)?.add_workspace(&name, &path)
+}
+
+#[tauri::command]
+fn remove_workspace(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+    db_handle(&app)?.remove_workspace(id)
+}
+
+#[tauri::command]
+fn get_active_workspace(app: tauri::AppHandle) -> Result<Option<WorkspaceDto>, String> {
+    let handle = db_handle(&app)?;
+    match handle.get_active_workspace_id()? {
+        Some(id) => handle.get_workspace(id),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+fn set_active_workspace(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+    db_handle(&app)?.set_active_workspace_id(id)
+}
+
+#[tauri::command]
+fn scan_workspace(app: tauri::AppHandle, id: i64) -> Result<ScanResultDto, String> {
+    db_handle(&app)?.scan_workspace(id)
+}
+
+#[tauri::command]
+fn list_documents(
+    app: tauri::AppHandle,
+    workspace_id: i64,
+    folder: Option<String>,
+) -> Result<Vec<DocumentDto>, String> {
+    db_handle(&app)?.list_documents(workspace_id, folder.as_deref())
+}
+
+#[tauri::command]
+fn list_subfolders(
+    app: tauri::AppHandle,
+    workspace_id: i64,
+    folder: Option<String>,
+) -> Result<Vec<FolderDto>, String> {
+    db_handle(&app)?.list_subfolders(workspace_id, folder.as_deref())
+}
+
+#[tauri::command]
+fn list_favorites(app: tauri::AppHandle, workspace_id: i64) -> Result<Vec<DocumentDto>, String> {
+    db_handle(&app)?.list_favorites(workspace_id)
+}
+
+#[tauri::command]
+fn list_recent(app: tauri::AppHandle, limit: Option<i64>) -> Result<Vec<DocumentDto>, String> {
+    db_handle(&app)?.list_recent(limit.unwrap_or(20))
+}
+
+#[tauri::command]
+fn set_document_favorite(
+    app: tauri::AppHandle,
+    id: i64,
+    favorite: bool,
+) -> Result<(), String> {
+    db_handle(&app)?.set_favorite(id, favorite)
+}
+
+#[tauri::command]
+fn record_document_open(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+    db_handle(&app)?.record_open(id)
+}
+
+#[tauri::command]
+fn search_documents(
+    app: tauri::AppHandle,
+    query: String,
+    workspace_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<SearchHitDto>, String> {
+    db_handle(&app)?.search(&query, workspace_id, limit.unwrap_or(50))
+}
+
+/// Start the MinerU runtime and wait until it is healthy. Returns engine info.
+#[tauri::command]
+async fn start_mineru(app: tauri::AppHandle) -> Result<String, String> {
+    let state = get_state(&app)?;
+    let runtime = state.mineru_runtime();
+    runtime.ensure_running().await?;
+    Ok(format!("MinerU 服务已就绪: {}", runtime.base_url))
+}
+
+/// Probe the MinerU runtime health without starting it.
+#[tauri::command]
+async fn mineru_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let state = get_state(&app)?;
+    let runtime = state.mineru_runtime();
+    let healthy = runtime.is_healthy().await;
+    Ok(serde_json::json!({
+        "healthy": healthy,
+        "baseUrl": runtime.base_url,
+    }))
 }
 
 #[tauri::command]
@@ -331,7 +463,7 @@ async fn fetch_url(
 
     if cancellation.cancelled() {
         cleanup_cancellation(&state, &task.id);
-    cleanup_task(&state, &task.id);
+        cleanup_task(&state, &task.id);
         return Err("cancelled".to_string());
     }
 
@@ -346,18 +478,18 @@ async fn fetch_url(
         task.error = Some("任务已取消".to_string());
         emit_status(&app, &task);
         cleanup_cancellation(&state, &task.id);
-    cleanup_task(&state, &task.id);
+        cleanup_task(&state, &task.id);
         return Err("cancelled".to_string());
     }
 
-    task.stage = ConversionStage::Extracting;
+    task.stage = ConversionStage::Parsing;
     task.progress = 0.5;
     emit_progress(&app, &task);
 
     let extracted = web_extractor::extract_content(&html, &url)
         .map_err(|e| format!("Failed to extract content: {}", e))?;
 
-    task.stage = ConversionStage::Structuring;
+    task.stage = ConversionStage::PostProcessing;
     task.progress = 0.7;
     emit_progress(&app, &task);
 
@@ -366,7 +498,7 @@ async fn fetch_url(
         task.error = Some("任务已取消".to_string());
         emit_status(&app, &task);
         cleanup_cancellation(&state, &task.id);
-    cleanup_task(&state, &task.id);
+        cleanup_task(&state, &task.id);
         return Err("cancelled".to_string());
     }
 
@@ -387,7 +519,7 @@ async fn fetch_url(
         task.error = Some("任务已取消".to_string());
         emit_status(&app, &task);
         cleanup_cancellation(&state, &task.id);
-    cleanup_task(&state, &task.id);
+        cleanup_task(&state, &task.id);
         return Err("cancelled".to_string());
     }
 
@@ -419,10 +551,6 @@ async fn fetch_url(
             image_count: 0,
             table_count,
             word_count,
-            ocr_page_count: None,
-            ocr_char_count: None,
-            avg_confidence_permille: None,
-            low_confidence_count: None,
         },
     };
 
@@ -430,9 +558,7 @@ async fn fetch_url(
 }
 
 /// Return the default output directory: the directory that contains the
-/// running binary, with an `output/` subdirectory appended. This mirrors
-/// "installed app folder / output" so that users who never touch the
-/// settings page still get a sensible, discoverable location.
+/// running binary, with an `output/` subdirectory appended.
 #[tauri::command]
 fn get_default_output_dir() -> String {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -441,9 +567,7 @@ fn get_default_output_dir() -> String {
     out.to_string_lossy().replace("\\", "/").to_string()
 }
 
-/// Open the given directory in the system file manager (Explorer / Finder /
-/// nautilus). Returns early when the path is empty so the frontend can treat
-/// this as a no-op.
+/// Open the given directory in the system file manager.
 #[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
     if path.trim().is_empty() {
@@ -483,9 +607,8 @@ fn get_supported_formats() -> Vec<String> {
 
 #[tauri::command]
 fn get_converter_info() -> String {
-    let converter = converters::get_converter();
     let info = ConverterInfo {
-        name: converter.name().to_string(),
+        name: "MinerU 3.x".to_string(),
         supported_formats: get_supported_formats(),
     };
     serde_json::to_string(&info).unwrap_or_default()
@@ -566,8 +689,7 @@ async fn download_url(url: String) -> Result<String, String> {
 }
 
 pub fn run() {
-    // Clean up leftover temp download files from previous runs to prevent
-    // disk space accumulation.
+    // Clean up leftover temp download files from previous runs.
     let temp_dir = std::env::temp_dir().join("omnimd_downloads");
     if temp_dir.exists() {
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -581,6 +703,8 @@ pub fn run() {
             convert_file,
             fetch_url,
             cancel_task,
+            start_mineru,
+            mineru_status,
             get_default_output_dir,
             open_folder,
             get_supported_formats,
@@ -590,6 +714,19 @@ pub fn run() {
             read_text_file,
             list_files_in_folder,
             download_url,
+            list_workspaces,
+            add_workspace,
+            remove_workspace,
+            get_active_workspace,
+            set_active_workspace,
+            scan_workspace,
+            list_documents,
+            list_subfolders,
+            list_favorites,
+            list_recent,
+            set_document_favorite,
+            record_document_open,
+            search_documents,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

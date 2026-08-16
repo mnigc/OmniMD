@@ -1,12 +1,10 @@
 ﻿import { create } from "zustand";
-import type { AiReadyOpts, OutputMode } from "../types";
+import type { AiReadyOpts, OutputMode, ParseQuality } from "../types";
 
 const STORAGE_KEY = "omnimd_settings";
 
-export type OcrMode = "off" | "auto" | "always";
-
 interface StoredSettings {
-  ocrMode: OcrMode;
+  parseQuality: ParseQuality;
   outputMode: OutputMode;
   defaultOutputDir: string;
   recursive: boolean;
@@ -17,7 +15,7 @@ interface StoredSettings {
 }
 
 const DEFAULTS: StoredSettings = {
-  ocrMode: "auto",
+  parseQuality: "auto",
   outputMode: "aiReady",
   defaultOutputDir: "",
   recursive: true,
@@ -34,7 +32,7 @@ function loadSettings(): StoredSettings {
       const parsed = JSON.parse(raw);
       return {
         ...DEFAULTS,
-        ocrMode: parsed.ocrMode ?? (parsed.ocrEnabled === true ? "always" : "auto"),
+        parseQuality: parsed.parseQuality ?? DEFAULTS.parseQuality,
         outputMode: parsed.outputMode ?? DEFAULTS.outputMode,
         defaultOutputDir: parsed.defaultOutputDir ?? DEFAULTS.defaultOutputDir,
         recursive: parsed.recursive ?? DEFAULTS.recursive,
@@ -55,7 +53,7 @@ function saveSettings(s: StoredSettings) {
 }
 
 interface SettingsStore extends StoredSettings {
-  setOcrMode: (v: OcrMode) => void;
+  setParseQuality: (v: ParseQuality) => void;
   setOutputMode: (m: OutputMode) => void;
   setDefaultOutputDir: (v: string) => void;
   setRecursive: (v: boolean) => void;
@@ -83,7 +81,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
   return {
     ...initial,
 
-    setOcrMode: (v) => patch({ ocrMode: v }),
+    setParseQuality: (v) => patch({ parseQuality: v }),
     setOutputMode: (m) => patch({ outputMode: m }),
     setDefaultOutputDir: (v) => patch({ defaultOutputDir: v }),
     setRecursive: (v) => patch({ recursive: v }),

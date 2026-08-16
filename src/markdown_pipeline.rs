@@ -37,6 +37,24 @@ pub fn count_table_separators(markdown: &str) -> usize {
     count
 }
 
+/// Count image references (`![alt](path)`) in the markdown, ignoring code
+/// blocks. Used for statistics and to verify assets were bundled.
+pub fn count_images(markdown: &str) -> usize {
+    let mut count = 0;
+    let mut in_code_block = false;
+    for line in markdown.lines() {
+        if line.trim_start().starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+        count += line.matches("![").count();
+    }
+    count
+}
+
 /// Count words in the markdown, ignoring code blocks and inline code.
 ///
 /// For CJK scripts (Han, Hiragana, Katakana, Hangul) each character counts as

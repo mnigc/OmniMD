@@ -5,8 +5,7 @@ target/
 # NOTE: Cargo.lock IS committed (Tauri is a binary project,
 # locking dependencies ensures reproducible builds).
 
-# ===== Tauri =====
-target/
+# ===== Tauri / build artifacts =====
 *.pdb
 *.exe
 *.dll
@@ -14,7 +13,7 @@ target/
 *.exp
 
 # ===== Node / Frontend =====
-frontend/node_modules/
+node_modules/
 frontend/dist/
 frontend/.pnpm-store/
 package-lock.json
@@ -25,9 +24,10 @@ yarn.lock
 .env.local
 .env.*.local
 
-# ===== IDE =====
+# ===== IDE / Tools =====
 .idea/
 .vscode/
+.kilo/
 *.swp
 *.swo
 *~
@@ -45,4 +45,20 @@ ehthumbs.db
 *.crash
 .rustup/settings.toml
 
+# ===== Sample data (large local test files, not for the repo) =====
 样例数据/
+
+# ===== PoC / experiments (large local test data, not for the repo) =====
+poc/
+
+# ===== OCR resources (models downloaded/generated locally) =====
+ocr_resources/
+
+# ===== Scratch / one-off scripts (not part of the codebase) =====
+check_pipeline.py
+fix_compile.py
+fix_pipeline.py
+fix_pipeline2.py
+write_pipeline_part1.py
+write_pipeline_part2.py
+pipeline_new.rs

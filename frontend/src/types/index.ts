@@ -4,7 +4,7 @@
   outputPath: string;
   outputDir: string;
   outputMode: OutputMode;
-  ocrMode?: "off" | "auto" | "always";
+  parseQuality?: ParseQuality;
   status: TaskStatus;
   progress: number;
   stage: ConversionStage;
@@ -28,10 +28,6 @@ export interface ConversionStats {
   imageCount: number;
   tableCount: number;
   wordCount: number;
-  ocrPageCount?: number;
-  ocrCharCount?: number;
-  avgConfidencePermille?: number;
-  lowConfidenceCount?: number;
 }
 
 export interface ConversionResult {
@@ -82,12 +78,53 @@ export type TaskStatus =
   | "Cancelled";
 
 export type ConversionStage =
+  | "Queued"
   | "Fetching"
-  | "DetectingFormat"
-  | "Extracting"
-  | "Ocr"
-  | "Structuring"
-  | "Serializing"
+  | "ModelLoading"
+  | "Parsing"
+  | "PostProcessing"
   | "Saving";
 
 export type OutputMode = "standard" | "aiReady" | "obsidian";
+
+export type ParseQuality = "auto" | "quick" | "high";
+
+// ---- M2 Workbench data layer ----
+
+export interface WorkspaceInfo {
+  id: number;
+  name: string;
+  path: string;
+  createdAt: string;
+  lastOpenedAt: string | null;
+}
+
+export interface LibraryDocument {
+  id: number;
+  workspaceId: number;
+  path: string;
+  title: string;
+  fileSize: number;
+  favorite: boolean;
+  source: string | null;
+  createdAt: string;
+  openedAt: string | null;
+}
+
+export interface LibraryFolder {
+  name: string;
+  path: string;
+  docCount: number;
+}
+
+export interface SearchHit {
+  document: LibraryDocument;
+  snippet: string | null;
+}
+
+export interface ScanResult {
+  indexed: number;
+  updated: number;
+  removed: number;
+  total: number;
+}
