@@ -44,3 +44,5 @@ ehthumbs.db
 *.temp
 *.crash
 .rustup/settings.toml
+
+样例数据/

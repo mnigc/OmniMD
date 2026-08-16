@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
 import {
-  ArrowRightLeft,
+  Eye,
+  Clock,
   Home,
-  ListTree,
   PanelLeft,
   Settings,
 } from "lucide-react";
 import { HomePage } from "./pages/HomePage";
 import { ConvertPage } from "./pages/ConvertPage";
-import { BatchPage } from "./pages/BatchPage";
+import { HistoryPage } from "./pages/HistoryPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { useTaskStore } from "./store/useTaskStore";
 import { useI18n } from "./i18n";
 import {
   applyTheme,
@@ -21,14 +20,14 @@ import { SidebarNavItem } from "./components/SidebarNavItem";
 import { WindowControls } from "./components/WindowControls";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
+import { ToastPortal } from "./lib/toast";
 
-type Page = "home" | "convert" | "batch" | "settings";
+type Page = "home" | "convert" | "history" | "settings";
 
 export function App() {
   const { t } = useI18n();
   const [page, setPage] = useState<Page>("home");
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const { currentTask } = useTaskStore();
 
   useEffect(() => {
     applyTheme();
@@ -43,15 +42,15 @@ export function App() {
   const renderPage = () => {
     switch (page) {
       case "home":
-        return <HomePage onNavigate={setPage} />;
+        return <HomePage />;
       case "convert":
         return <ConvertPage onNavigate={setPage} />;
-      case "batch":
-        return <BatchPage />;
+      case "history":
+        return <HistoryPage onNavigate={setPage} />;
       case "settings":
         return <SettingsPage />;
       default:
-        return <HomePage onNavigate={setPage} />;
+        return <HomePage />;
     }
   };
 
@@ -77,14 +76,7 @@ export function App() {
             OmniMD - Anything to Markdown
           </span>
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          {currentTask && (
-            <span className="text-xs text-muted-foreground px-2 py-1 rounded-md bg-muted max-w-44 truncate">
-              {t("header.converting")}:{" "}
-              {currentTask.sourcePath.split("/").pop()}
-            </span>
-          )}
-          </div>
+        <div className="ml-auto flex items-center gap-2"></div>
         <WindowControls />
       </header>
 
@@ -95,7 +87,7 @@ export function App() {
             sidebarOpen ? "w-52" : "w-0"
           )}
         >
-          <nav className="flex flex-col gap-0.5 flex-shrink-0">
+           <nav className="flex flex-col gap-0.5 flex-shrink-0">
             <SidebarNavItem
               icon={<Home size={16} />}
               label={t("nav.home")}
@@ -103,16 +95,16 @@ export function App() {
               onClick={() => setPage("home")}
             />
             <SidebarNavItem
-              icon={<ArrowRightLeft size={16} />}
+              icon={<Clock size={16} />}
+              label={t("nav.history")}
+              active={page === "history"}
+              onClick={() => setPage("history")}
+            />
+            <SidebarNavItem
+              icon={<Eye size={16} />}
               label={t("nav.convert")}
               active={page === "convert"}
               onClick={() => setPage("convert")}
-            />
-            <SidebarNavItem
-              icon={<ListTree size={16} />}
-              label={t("nav.batch")}
-              active={page === "batch"}
-              onClick={() => setPage("batch")}
             />
           </nav>
 
@@ -135,6 +127,7 @@ export function App() {
 
         <main className="flex-1 overflow-hidden">{renderPage()}</main>
       </div>
+      <ToastPortal />
     </div>
   );
 }

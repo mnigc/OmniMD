@@ -1,13 +1,37 @@
-export interface ConversionTask {
+﻿export interface ConversionTask {
   id: string;
   sourcePath: string;
   outputPath: string;
+  outputDir: string;
+  outputMode: OutputMode;
+  ocrMode?: "off" | "auto" | "always";
   status: TaskStatus;
   progress: number;
   stage: ConversionStage;
   error: string | null;
   createdAt: number;
   completedAt: number | null;
+}
+
+export interface HistoryEntry {
+  id: string;
+  sourcePath: string;
+  outputPath: string;
+  outputMode: OutputMode;
+  status: TaskStatus;
+  error: string | null;
+  createdAt: number;
+  completedAt: number | null;
+}
+
+export interface ConversionStats {
+  imageCount: number;
+  tableCount: number;
+  wordCount: number;
+  ocrPageCount?: number;
+  ocrCharCount?: number;
+  avgConfidencePermille?: number;
+  lowConfidenceCount?: number;
 }
 
 export interface ConversionResult {
@@ -17,6 +41,8 @@ export interface ConversionResult {
   assetCount: number;
   errors: ErrorDto[];
   success: boolean;
+  outputPath: string;
+  stats: ConversionStats;
 }
 
 export interface ErrorDto {
@@ -25,17 +51,16 @@ export interface ErrorDto {
   retryable: boolean;
 }
 
-export interface BatchResultDto {
-  total: number;
-  completed: number;
-  failed: number;
-  results: ConversionResult[];
+export interface AiReadyOpts {
+  genToc: boolean;
+  genMeta: boolean;
 }
 
 export interface TaskProgressDto {
   taskId: string;
   progress: number;
   stage: string;
+  detail?: string;
 }
 
 export interface TaskStatusDto {
@@ -57,9 +82,12 @@ export type TaskStatus =
   | "Cancelled";
 
 export type ConversionStage =
+  | "Fetching"
   | "DetectingFormat"
   | "Extracting"
   | "Ocr"
   | "Structuring"
   | "Serializing"
   | "Saving";
+
+export type OutputMode = "standard" | "aiReady" | "obsidian";

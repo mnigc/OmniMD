@@ -1,67 +1,137 @@
-import { useCallback, useState } from "react";
-import { Check, FileUp, Upload, X } from "lucide-react";
-import { pickFiles } from "../api/dialogs";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
+import { FileUp, FolderOpen, Upload } from "lucide-react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { pickFiles, pickDir } from "../api/dialogs";
 import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
-import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 
 interface DropZoneProps {
   onFiles: (paths: string[]) => void;
-  disabled: boolean;
+  onFolder?: (path: string) => void;
   formats: string[];
   className?: string;
 }
 
 export function DropZone({
   onFiles,
-  disabled,
+  onFolder,
   formats,
   className,
 }: DropZoneProps) {
   const { t } = useI18n();
   const [isDragging, setIsDragging] = useState(false);
-  const [dragCount, setDragCount] = useState(0);
-  const [selectedCount, setSelectedCount] = useState(0);
+  const [isFolderDrag, setIsFolderDrag] = useState(false);
+  const tauriDndReady = useRef(false);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    tauriDndReady.current = false;
+    (async () => {
+      try {
+        const appWindow = getCurrentWebviewWindow();
+        unlisten = await appWindow.onDragDropEvent((event) => {
+          const type = event.payload.type;
+          if (type === "enter") {
+            const paths = (event.payload as { paths?: string[] }).paths ?? [];
+            const single = paths.length === 1 ? paths[0] : undefined;
+            setIsFolderDrag(
+              single !== undefined &&
+                !(single.split(/[\\/]/).pop() ?? "").includes(".")
+            );
+            setIsDragging(true);
+          } else if (type === "over") {
+            setIsDragging(true);
+          } else if (type === "leave") {
+            setIsDragging(false);
+            setIsFolderDrag(false);
+          } else if (type === "drop") {
+            setIsDragging(false);
+            setIsFolderDrag(false);
+            const paths = (event.payload as { paths?: string[] }).paths ?? [];
+            if (paths.length) {
+              onFiles(paths);
+            }
+          }
+        });
+        tauriDndReady.current = true;
+      } catch {
+        /* non-Tauri, fall back to DOM drag/drop */
+      }
+    })();
+    return () => {
+      unlisten?.();
+      tauriDndReady.current = false;
+    };
+  }, [onFiles]);
 
   const openFilePicker = useCallback(async () => {
-    if (disabled) return;
     const paths = await pickFiles(formats);
     if (paths.length > 0) {
-      setSelectedCount(paths.length);
       onFiles(paths);
     }
-  }, [disabled, formats, onFiles]);
+  }, [formats, onFiles]);
 
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragCount((c) => c + 1);
-    setIsDragging(true);
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragCount((c) => c - 1);
-    if (dragCount <= 1) {
-      setIsDragging(false);
-    }
-  }, [dragCount]);
+  const openFolderPicker = useCallback(async () => {
+    if (!onFolder) return;
+    const dir = await pickDir();
+    if (dir) onFolder(dir);
+  }, [onFolder]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
   }, []);
 
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    setIsFolderDrag(false);
+  }, []);
+
   const handleDrop = useCallback(
-    (e: React.DragEvent) => {
+    async (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
       setIsDragging(false);
-      setDragCount(0);
+      setIsFolderDrag(false);
+
+      if (tauriDndReady.current) return;
+
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      const files = dt.files;
+      if (files && files.length > 0) {
+        const paths: string[] = [];
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i] as any;
+          if (f.path) paths.push(f.path);
+        }
+        if (paths.length > 0) {
+          onFiles(paths);
+          return;
+        }
+      }
+      if (dt.items && dt.items.length > 0) {
+        const item = dt.items[0];
+        if (item.kind === "file") {
+          const entry = item.webkitGetAsEntry?.();
+          if (entry && entry.isDirectory && onFolder) {
+            openFolderPicker();
+            return;
+          }
+        }
+      }
       openFilePicker();
     },
-    [openFilePicker]
+    [onFiles, onFolder, openFilePicker, openFolderPicker]
   );
 
   return (
@@ -70,53 +140,69 @@ export function DropZone({
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-      onClick={openFilePicker}
-      role="button"
-      aria-disabled={disabled}
       className={cn(
-        "relative flex flex-col items-center justify-center p-8 rounded-xl border-2 border-dashed transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        "flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-dashed transition-all duration-200",
         className,
-        disabled
-          ? "border-input bg-muted/50 opacity-60 cursor-not-allowed"
-          : isDragging
-            ? "border-primary bg-primary/5 scale-[1.01] shadow-lg shadow-primary/10"
-            : "border-border bg-muted/30 hover:border-primary/50 hover:bg-muted/50"
+        isDragging
+          ? "border-primary bg-primary/5 shadow-lg shadow-primary/10"
+          : "border-border bg-muted/30 hover:border-primary/50 hover:bg-muted/50"
       )}
     >
       <div
         className={cn(
-          "mb-4 p-4 rounded-full transition-colors",
+          "p-2.5 rounded-full shrink-0 transition-colors",
           isDragging
             ? "bg-primary/10 text-primary"
             : "bg-muted text-muted-foreground"
         )}
       >
-        {disabled ? (
-          <X size={28} />
-        ) : isDragging ? (
-          <Upload size={28} className="animate-bounce" />
+        {isDragging ? (
+          isFolderDrag ? (
+            <FolderOpen size={20} />
+          ) : (
+            <Upload size={20} className="animate-bounce" />
+          )
         ) : (
-          <FileUp size={28} />
+          <FileUp size={20} />
         )}
       </div>
 
-      <p className="text-base font-medium mb-1">
-        {disabled
-          ? t("dropzone.dropDisabled")
-          : isDragging
-            ? t("dropzone.releaseToOpen")
-            : t("dropzone.dropFiles")}
-      </p>
-      <p className="text-sm text-muted-foreground text-center">
-        {t("dropzone.supported")}
-      </p>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate">
+          {isDragging
+            ? isFolderDrag
+              ? t("dropzone.folderDetected")
+              : t("dropzone.releaseToConvert")
+            : t("dropzone.dropFilesOrFolder")}
+        </p>
+      </div>
 
-      {selectedCount > 0 && (
-        <Badge variant="success" className="mt-4 gap-1">
-          <Check size={12} />
-          {selectedCount} {t("dropzone.files")} {t("dropzone.selected")}
-        </Badge>
-      )}
+      <div className="flex items-center gap-2 shrink-0">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={(e) => {
+            e.stopPropagation();
+            openFilePicker();
+          }}
+        >
+          <FileUp size={14} />
+          {t("home.addFiles")}
+        </Button>
+        {onFolder && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={(e) => {
+              e.stopPropagation();
+              openFolderPicker();
+            }}
+          >
+            <FolderOpen size={14} />
+            {t("home.chooseFolder")}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

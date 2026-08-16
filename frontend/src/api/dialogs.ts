@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-dialog";
+﻿import { open } from "@tauri-apps/plugin-dialog";
 
 export async function pickFiles(formats: string[]): Promise<string[]> {
   const selected = await open({
@@ -12,6 +12,14 @@ export async function pickFiles(formats: string[]): Promise<string[]> {
   });
   if (selected === null) return [];
   return Array.isArray(selected) ? selected : [selected];
+}
+
+export async function pickDir(): Promise<string | null> {
+  return open({
+    directory: true,
+    multiple: false,
+    title: "Select folder to convert",
+  });
 }
 
 export async function pickOutputDir(): Promise<string | null> {

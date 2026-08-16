@@ -64,6 +64,36 @@
   html {
     scroll-behavior: smooth;
   }
+
+  /* ---- Global scrollbar styling ---- */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.35);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.55);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }
 
 .prose h1 {
@@ -142,4 +172,56 @@
 .prose td,
 .prose th {
   display: table-cell;
+}
+
+/* ---- Golden selling-point pills ---- */
+.golden-pill {
+  position: relative;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 212, 151, 0.82);
+  background: linear-gradient(
+    110deg,
+    rgba(255, 232, 150, 0.98),
+    rgba(255, 255, 255, 0.96) 40%,
+    rgba(255, 207, 95, 0.94)
+  );
+}
+
+.dark .golden-pill {
+  border: 1px solid rgba(255, 212, 151, 0.284);
+  background: linear-gradient(
+    110deg,
+    rgba(255, 232, 150, 0.22),
+    rgba(255, 255, 255, 0.12) 40%,
+    rgba(255, 207, 95, 0.20)
+  );
+}
+
+/* Sweeping white shine */
+.golden-pill::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.85) 50%,
+    transparent 80%
+  );
+  background-size: 200% 100%;
+  background-position: -100% 0;
+  animation: golden-shine 3.5s ease-in-out infinite;
+  mix-blend-mode: overlay;
+}
+
+@keyframes golden-shine {
+  0% {
+    background-position: 300% 0; /* 起始：在左边外面 */
+  }
+  100% {
+    background-position: -100% 0;  /* 结束：在右边外面 */
+  }
 }
