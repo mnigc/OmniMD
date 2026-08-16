@@ -70,9 +70,8 @@ struct MinerFileResult {
 /// `GET /tasks/{id}` (poll status), `GET /tasks/{id}/result` (fetch output).
 ///
 /// Request field names and status values were verified against MinerU 3.4.5
-/// during M0 (see `poc/mineru_poc/`): multipart fields `files`,
-/// `parse_method`, `backend`, `formula_enable`, `table_enable`, `return_md`,
-/// `return_content_list`.
+/// during M0: multipart fields `files`, `parse_method`, `backend`,
+/// `formula_enable`, `table_enable`, `return_md`, `return_content_list`.
 pub struct MinerUEngine {
     runtime: std::sync::Arc<MinerURuntime>,
     client: reqwest::Client,
