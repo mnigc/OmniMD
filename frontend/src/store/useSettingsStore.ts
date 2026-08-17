@@ -12,6 +12,8 @@ interface StoredSettings {
   aiEnabled: boolean;
   aiReadyToc: boolean;
   aiReadyMeta: boolean;
+  allowOnline: boolean;
+  concurrency: number;
 }
 
 const DEFAULTS: StoredSettings = {
@@ -20,9 +22,11 @@ const DEFAULTS: StoredSettings = {
   defaultOutputDir: "",
   recursive: true,
   keepStructure: true,
-  aiEnabled: false,
-  aiReadyToc: false,
-  aiReadyMeta: false,
+  aiEnabled: true,
+  aiReadyToc: true,
+  aiReadyMeta: true,
+  allowOnline: false,
+  concurrency: 3,
 };
 
 function loadSettings(): StoredSettings {
@@ -40,6 +44,8 @@ function loadSettings(): StoredSettings {
         aiEnabled: parsed.aiEnabled ?? DEFAULTS.aiEnabled,
         aiReadyToc: parsed.aiReadyToc ?? DEFAULTS.aiReadyToc,
         aiReadyMeta: parsed.aiReadyMeta ?? DEFAULTS.aiReadyMeta,
+        allowOnline: parsed.allowOnline ?? DEFAULTS.allowOnline,
+        concurrency: parsed.concurrency ?? DEFAULTS.concurrency,
       };
     }
   } catch {
@@ -61,6 +67,8 @@ interface SettingsStore extends StoredSettings {
   setAiEnabled: (v: boolean) => void;
   setAiReadyToc: (v: boolean) => void;
   setAiReadyMeta: (v: boolean) => void;
+  setAllowOnline: (v: boolean) => void;
+  setConcurrency: (v: number) => void;
   /** Build the AiReadyOpts payload for the backend, gated by the master AI
    *  toggle so the optional TOC/metadata enhancements only apply when the AI
    *  feature group is enabled. Returns undefined when there is nothing to do
@@ -89,6 +97,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
     setAiEnabled: (v) => patch({ aiEnabled: v }),
     setAiReadyToc: (v) => patch({ aiReadyToc: v }),
     setAiReadyMeta: (v) => patch({ aiReadyMeta: v }),
+    setAllowOnline: (v) => patch({ allowOnline: v }),
+    setConcurrency: (v) => patch({ concurrency: v }),
 
     buildAiReadyOpts: () => {
       const s = get();

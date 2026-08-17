@@ -10,7 +10,7 @@
 
 A cross-platform desktop application that converts documents such as PDF, Word, Excel, PowerPoint, EPUB, and HTML into clean Markdown.
 
-Built with **Tauri 2** + **Rust** + **React**. Core conversion powered by [`anydoc`](https://crates.io/crates/anydoc).
+Built with **Tauri 2** + **Rust** + **React**. Core conversion powered by [MinerU](https://github.com/opendatalab/MinerU) 3.x.
 
 </div>
 
@@ -88,7 +88,7 @@ OmniMD/
 │   ├── lib.rs              # Tauri command registration (frontend API)
 │   ├── pipeline.rs         # Conversion pipeline (read → convert → write)
 │   ├── file_utils.rs       # Path helpers / format whitelist
-│   ├── converters/         # anydoc converter implementation
+│   ├── converters/         # MinerU engine integration (HTTP client + runtime management)
 │   └── models/             # Document / Task / Asset data structures
 ├── frontend/               # React + TypeScript frontend
 │   ├── src/
@@ -109,10 +109,8 @@ The frontend calls registered Rust commands via Tauri's `invoke`. See [`src/lib.
 | Command | Parameters | Returns | Description |
 |---------|-----------|---------|-------------|
 | `convert_file` | `sourcePath`, `outputDir` | `ConversionResult` | Convert a single file |
-| `convert_batch` | `sourcePaths`, `outputDir`, `concurrency` | `BatchResult` | Batch concurrent conversion |
 | `get_supported_formats` | — | `string[]` | Supported extensions |
 | `get_converter_info` | — | `ConverterInfo` | Converter name and formats |
-| `preview_markdown` | `markdown` | `string` | Preview endpoint (currently passthrough) |
 
 During conversion, progress is pushed via Tauri events `task-progress` / `task-status`, which the frontend listens to for live UI updates.
 
@@ -134,7 +132,7 @@ Test fixtures live in [`tests/fixtures/`](tests/).
 |-------|-----------|
 | Desktop framework | Tauri 2 |
 | Backend language | Rust 2021 edition |
-| Conversion engine | [anydoc](https://crates.io/crates/anydoc) 0.1 |
+| Conversion engine | [MinerU](https://github.com/opendatalab/MinerU) 3.x (via `mineru-api`) |
 | Async runtime | tokio |
 | Frontend framework | React 18 + TypeScript 5 |
 | Build tool | Vite 5 |
@@ -148,7 +146,7 @@ TODO: Add a LICENSE file (MIT or Apache-2.0 recommended).
 
 ## 🗺️ Roadmap
 
-- [x] Phase 1 MVP — single-file / batch conversion, anydoc engine integration
+- [x] Phase 1 MVP — single-file / batch conversion, MinerU engine integration
 - [ ] Settings page (output format, concurrency, OCR toggle)
 - [ ] OCR image text recognition (model structure reserved in `src/models/ocr.rs`)
 - [ ] Drag-and-drop folder recursive conversion

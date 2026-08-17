@@ -10,7 +10,7 @@
 
 PDF, Word, Excel, PowerPoint, EPUB, HTML 등 다양한 문서를 깔끔한 Markdown으로 변환하는 크로스 플랫폼 데스크톱 애플리케이션입니다.
 
-**Tauri 2** + **Rust** + **React** 기반으로 구축되었으며, 핵심 변환 엔진은 [`anydoc`](https://crates.io/crates/anydoc)에서 제공됩니다.
+**Tauri 2** + **Rust** + **React** 기반으로 구축되었으며, 핵심 변환 엔진은 [MinerU](https://github.com/opendatalab/MinerU) 3.x에서 제공됩니다.
 
 </div>
 
@@ -87,7 +87,7 @@ OmniMD/
 │   ├── lib.rs              # Tauri 명령 등록 (프론트엔드 API)
 │   ├── pipeline.rs         # 변환 파이프라인 (읽기 → 변환 → 쓰기)
 │   ├── file_utils.rs       # 경로 헬퍼 / 포맷 화이트리스트
-│   ├── converters/         # anydoc 변환기 구현
+│   ├── engine/           # MinerU 엔진 통합 (HTTP client + 런타임 관리)
 │   └── models/             # Document / Task / Asset 데이터 구조
 ├── frontend/               # React + TypeScript 프론트엔드
 │   ├── src/
@@ -111,10 +111,8 @@ OmniMD/
 | 명령 | 매개변수 | 반환값 | 설명 |
 |------|----------|--------|------|
 | `convert_file` | `sourcePath`, `outputDir` | `ConversionResult` | 단일 파일 변환 |
-| `convert_batch` | `sourcePaths`, `outputDir`, `concurrency` | `BatchResult` | 배치 동시 변환 |
 | `get_supported_formats` | — | `string[]` | 지원 확장자 목록 |
 | `get_converter_info` | — | `ConverterInfo` | 변환기 이름 및 포맷 |
-| `preview_markdown` | `markdown` | `string` | 미리보기 엔드포인트 (현재 패스스루) |
 
 변환 중 진행률은 Tauri 이벤트 `task-progress` / `task-status`를 통해 푸시되며, 프론트엔드는 이를 수신하여 실시간 UI를 업데이트합니다.
 
@@ -136,7 +134,7 @@ cd frontend && pnpm build
 |------|------|
 | 데스크톱 프레임워크 | Tauri 2 |
 | 백엔드 언어 | Rust 2021 edition |
-| 변환 엔진 | [anydoc](https://crates.io/crates/anydoc) 0.1 |
+| 변환 엔진 | [MinerU](https://github.com/opendatalab/MinerU) 3.x (via `mineru-api`) |
 | 비동기 런타임 | tokio |
 | 프론트엔드 프레임워크 | React 18 + TypeScript 5 |
 | 빌드 도구 | Vite 5 |
@@ -150,7 +148,7 @@ TODO: LICENSE 파일 추가 (MIT 또는 Apache-2.0 권장).
 
 ## 🗺️ 로드맵
 
-- [x] Phase 1 MVP — 단일 파일 / 배치 변환, anydoc 엔진 통합
+- [x] Phase 1 MVP — 단일 파일 / 배치 변환, MinerU 엔진 통합
 - [ ] Settings 페이지 (출력 포맷, 동시성, OCR 토글)
 - [ ] OCR 이미지 텍스트 인식 (모델 구조는 `src/models/ocr.rs`에 예약됨)
 - [ ] 드래그 앤 드롭 폴더 재귀 변환

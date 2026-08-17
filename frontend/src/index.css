@@ -219,9 +219,43 @@
 
 @keyframes golden-shine {
   0% {
-    background-position: 300% 0; /* 起始：在左边外面 */
+    background-position: 300% 0;
   }
   100% {
-    background-position: -100% 0;  /* 结束：在右边外面 */
+    background-position: -100% 0;
   }
+}
+
+/* CodeMirror theme overrides */
+.cm-editor {
+  height: 100%;
+  font-size: 0.875rem;
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+.cm-editor .cm-scroller {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+.cm-editor .cm-gutters {
+  background: transparent;
+  border-right: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+.cm-editor .cm-activeLineGutter {
+  background: hsl(var(--accent) / 0.3);
+}
+.cm-editor .cm-activeLine {
+  background: hsl(var(--accent) / 0.15);
+}
+.cm-editor .cm-cursor {
+  border-left-color: hsl(var(--foreground));
+}
+.cm-editor .cm-selectionBackground,
+.cm-focused .cm-selectionBackground {
+  background: hsl(var(--primary) / 0.2) !important;
+}
+.cm-editor .cm-matchingBracket {
+  background: hsl(var(--primary) / 0.2);
+  outline: 1px solid hsl(var(--primary) / 0.4);
 }

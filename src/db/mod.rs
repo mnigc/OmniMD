@@ -21,6 +21,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+use crate::models::task::{BatchTaskDto, BatchSummaryDto, OutputMode, ParseQuality};
+
 // ---------------------------------------------------------------------------
 // DTOs (serialized to the frontend, camelCase)
 // ---------------------------------------------------------------------------
@@ -120,6 +122,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
     title, body, tags,
     tokenize = 'unicode61 remove_diacritics 2'
 );
+
+CREATE TABLE IF NOT EXISTS batch_tasks (
+    id           TEXT PRIMARY KEY,
+    source_path  TEXT NOT NULL,
+    output_path  TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'Pending',
+    progress     REAL NOT NULL DEFAULT 0.0,
+    stage        TEXT NOT NULL DEFAULT 'Queued',
+    error        TEXT,
+    created_at   INTEGER NOT NULL,
+    completed_at INTEGER,
+    elapsed_secs INTEGER NOT NULL DEFAULT 0,
+    retry_count  INTEGER NOT NULL DEFAULT 0,
+    output_mode  TEXT NOT NULL DEFAULT 'aiReady',
+    parse_quality TEXT NOT NULL DEFAULT 'auto'
+);
+
+CREATE INDEX IF NOT EXISTS idx_batch_tasks_status ON batch_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_batch_tasks_created ON batch_tasks(created_at);
 "#;
 
 pub struct WorkspaceDb {
@@ -560,6 +581,181 @@ impl WorkspaceDb {
         Ok(rows)
     }
 
+    // -- batch tasks ---------------------------------------------------------
+
+    pub fn insert_batch_task(
+        &self,
+        id: &str,
+        source_path: &str,
+        output_path: &str,
+        output_mode: &OutputMode,
+        parse_quality: &ParseQuality,
+        created_at: u64,
+    ) -> Result<(), String> {
+        let mode = serde_json::to_string(output_mode).unwrap_or_else(|_| "\"aiReady\"".to_string());
+        let quality =
+            serde_json::to_string(parse_quality).unwrap_or_else(|_| "\"auto\"".to_string());
+        self.conn
+            .execute(
+                "INSERT INTO batch_tasks (id, source_path, output_path, status, created_at, output_mode, parse_quality)
+                 VALUES (?1, ?2, ?3, 'Pending', ?4, ?5, ?6)",
+                rusqlite::params![id, source_path, output_path, created_at, mode, quality],
+            )
+            .map_err(err)?;
+        Ok(())
+    }
+
+    pub fn update_batch_task_status(
+        &self,
+        id: &str,
+        status: &str,
+        error: Option<&str>,
+        elapsed_secs: u64,
+    ) -> Result<(), String> {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let completed_at: Option<u64> = match status {
+            "Completed" | "Failed" | "Cancelled" => Some(now),
+            _ => None,
+        };
+        self.conn
+            .execute(
+                "UPDATE batch_tasks SET status = ?1, error = ?2, elapsed_secs = ?3, completed_at = ?4
+                 WHERE id = ?5",
+                rusqlite::params![status, error, elapsed_secs, completed_at, id],
+            )
+            .map_err(err)?;
+        Ok(())
+    }
+
+    pub fn list_batch_tasks(
+        &self,
+        status: &str,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Vec<BatchTaskDto>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, source_path, output_path, status, progress, stage, error,
+                        created_at, completed_at, elapsed_secs, output_mode, parse_quality, retry_count
+                 FROM batch_tasks
+                 WHERE status = ?1
+                 ORDER BY created_at ASC
+                 LIMIT ?2 OFFSET ?3",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(rusqlite::params![status, limit, offset], row_to_batch_task)
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        Ok(rows)
+    }
+
+    pub fn list_all_batch_tasks(&self) -> Result<Vec<BatchTaskDto>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, source_path, output_path, status, progress, stage, error,
+                        created_at, completed_at, elapsed_secs, output_mode, parse_quality, retry_count
+                 FROM batch_tasks
+                 ORDER BY created_at ASC",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map([], row_to_batch_task)
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        Ok(rows)
+    }
+
+    pub fn delete_batch_tasks(&self, status: &str) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM batch_tasks WHERE status = ?1", rusqlite::params![status])
+            .map_err(err)?;
+        Ok(())
+    }
+
+    pub fn get_batch_summary(&self) -> Result<BatchSummaryDto, String> {
+        let total: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM batch_tasks", [], |r| r.get(0))
+            .map_err(err)?;
+        let pending: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Pending'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        let processing: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Processing'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        let completed: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Completed'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        let failed: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Failed'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        let cancelled: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Cancelled'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        let paused: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Paused'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        Ok(BatchSummaryDto {
+            total: total as u64,
+            pending: pending as u64,
+            processing: processing as u64,
+            completed: completed as u64,
+            failed: failed as u64,
+            cancelled: cancelled as u64,
+            paused: paused as u64,
+        })
+    }
+
+    pub fn get_batch_task_created_at(&self, id: &str) -> Result<Option<u64>, String> {
+        self.conn
+            .query_row(
+                "SELECT created_at FROM batch_tasks WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(err)
+            .map(|opt| opt.map(|v| v as u64))
+    }
+
     // -- helpers --------------------------------------------------------------
 
     fn workspace_root(&self, workspace_id: i64) -> Result<String, String> {
@@ -600,6 +796,29 @@ fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<WorkspaceDto> {
         path: r.get(2)?,
         created_at: r.get(3)?,
         last_opened_at: r.get(4)?,
+    })
+}
+
+fn row_to_batch_task(r: &rusqlite::Row) -> rusqlite::Result<BatchTaskDto> {
+    let output_mode_str: String = r.get(10)?;
+    let parse_quality_str: String = r.get(11)?;
+    let output_mode: OutputMode = serde_json::from_str(&output_mode_str).unwrap_or(OutputMode::AiReady);
+    let parse_quality: ParseQuality =
+        serde_json::from_str(&parse_quality_str).unwrap_or(ParseQuality::Auto);
+    Ok(BatchTaskDto {
+        id: r.get(0)?,
+        source_path: r.get(1)?,
+        output_path: r.get(2)?,
+        status: r.get(3)?,
+        progress: r.get(4)?,
+        stage: r.get(5)?,
+        error: r.get(6)?,
+        created_at: r.get::<_, i64>(7)? as u64,
+        completed_at: r.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+        elapsed_secs: r.get::<_, i64>(9)? as u64,
+        output_mode,
+        parse_quality,
+        retry_count: r.get::<_, i32>(12)? as u32,
     })
 }
 

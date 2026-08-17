@@ -166,6 +166,48 @@ pub struct ConversionResult {
     pub stats: Option<ConversionStats>,
 }
 
+// ---------------------------------------------------------------------------
+// Batch task DTOs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchTaskDto {
+    pub id: String,
+    pub source_path: String,
+    pub output_path: String,
+    pub status: String,
+    pub progress: f32,
+    pub stage: String,
+    pub error: Option<String>,
+    pub created_at: u64,
+    pub completed_at: Option<u64>,
+    pub elapsed_secs: u64,
+    pub output_mode: OutputMode,
+    pub parse_quality: ParseQuality,
+    pub retry_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchSummaryDto {
+    pub total: u64,
+    pub pending: u64,
+    pub processing: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub cancelled: u64,
+    pub paused: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchFilter {
+    pub status: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
+}
+
 impl ConversionTask {
     pub fn new(source_path: &str, output_path: &str) -> Self {
         Self::with_mode(source_path, output_path, OutputMode::default())

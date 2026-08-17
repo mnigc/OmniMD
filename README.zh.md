@@ -10,7 +10,7 @@
 
 将 PDF、Word、Excel、PPT、EPUB、HTML 等文档一键转换为 Markdown 的跨平台桌面应用。
 
-基于 **Tauri 2** + **Rust** + **React** 构建，核心转换引擎由 [`anydoc`](https://crates.io/crates/anydoc) 提供。
+基于 **Tauri 2** + **Rust** + **React** 构建，核心转换引擎由 [MinerU](https://github.com/opendatalab/MinerU) 3.x 提供。
 
 </div>
 
@@ -83,7 +83,7 @@ OmniMD/
 │   ├── lib.rs              # Tauri 命令注册（前端调用的接口）
 │   ├── pipeline.rs         # 转换流水线（读取 → 转换 → 写出）
 │   ├── file_utils.rs       # 路径处理 / 格式白名单
-│   ├── converters/         # anydoc 转换器实现
+│   ├── converters/         # MinerU 引擎集成（HTTP client + 运行时管理）
 │   └── models/             # Document / Task / Asset 数据结构
 ├── frontend/               # React + TypeScript 前端
 │   ├── src/
@@ -107,10 +107,8 @@ OmniMD/
 | 命令 | 入参 | 返回 | 说明 |
 |------|------|------|------|
 | `convert_file` | `sourcePath`, `outputDir` | `ConversionResult` | 转换单文件 |
-| `convert_batch` | `sourcePaths`, `outputDir`, `concurrency` | `BatchResult` | 批量并发转换 |
 | `get_supported_formats` | — | `string[]` | 支持的扩展名列表 |
 | `get_converter_info` | — | `ConverterInfo` | 转换器名称与支持格式 |
-| `preview_markdown` | `markdown` | `string` | 预览接口（当前直通） |
 
 转换过程中通过 Tauri 事件 `task-progress` / `task-status` 推送进度，前端可监听并实时更新 UI。
 
@@ -132,7 +130,7 @@ cd frontend && pnpm build
 |----|------|
 | 桌面框架 | Tauri 2 |
 | 后端语言 | Rust 2021 edition |
-| 转换引擎 | [anydoc](https://crates.io/crates/anydoc) 0.1 |
+| 转换引擎 | [MinerU](https://github.com/opendatalab/MinerU) 3.x (via `mineru-api`) |
 | 异步运行时 | tokio |
 | 前端框架 | React 18 + TypeScript 5 |
 | 构建工具 | Vite 5 |
@@ -146,7 +144,7 @@ TODO: 添加 LICENSE 文件（建议 MIT 或 Apache-2.0）。
 
 ## 🗺️ 路线图
 
-- [x] Phase 1 MVP — 单文件 / 批量转换、anydoc 引擎集成
+- [x] Phase 1 MVP — 单文件 / 批量转换、MinerU 引擎集成
 - [ ] Settings 页面配置（输出格式、并发数、OCR 开关）
 - [ ] OCR 图片文字识别（模型结构已预留于 `src/models/ocr.rs`）
 - [ ] 拖拽文件夹递归转换

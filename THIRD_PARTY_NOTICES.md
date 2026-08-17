@@ -2,39 +2,64 @@
 
 This project incorporates components from the following third-party projects.
 
-## PP-OCRv6 Models
+## MinerU
 
-- **Source**: PaddlePaddle / PaddleOCR
-- **License**: Apache-2.0
-- **Description**: Text detection (pp-ocrv6_small_det.onnx), text recognition (pp-ocrv6_small_rec.onnx), and document orientation classification (pp-lcnet_x1_0_doc_ori.onnx) models.
-- **Website**: https://github.com/PaddlePaddle/PaddleOCR
+- **Source**: OpenDataLab / MinerU
+- **License**: Apache-2.0 (with additional model license terms — see `LICENSE` for details)
+- **Description**: Document parsing engine (MinerU 3.x). OmniMD shells out to the official `mineru-api` FastAPI service as a subprocess and communicates over HTTP.
+- **Website**: https://github.com/opendatalab/MinerU
+- **Models**: Downloaded at first use from HuggingFace / ModelScope. Users must review and accept individual model license terms.
 
-## oar-ocr
-
-- **License**: Apache-2.0
-- **Description**: Rust OCR library wrapping ONNX Runtime inference for PP-OCR models.
-- **Repository**: https://github.com/GreatV/oar-ocr
-
-## oar-ocr-core
+## Tauri
 
 - **License**: Apache-2.0
-- **Description**: Core types and predictors for oar-ocr.
-- **Repository**: https://github.com/GreatV/oar-ocr
+- **Description**: Desktop application framework (Rust + Web frontend bridge).
+- **Website**: https://tauri.app
 
-## ort (ONNX Runtime for Rust)
+## Tokio
 
 - **License**: MIT / Apache-2.0
-- **Description**: Rust bindings for ONNX Runtime.
-- **Repository**: https://github.com/pykeio/ort
+- **Description**: Asynchronous runtime for Rust.
+- **Repository**: https://github.com/tokio-rs/tokio
 
-## ONNX Runtime
+## reqwest
+
+- **License**: MIT / Apache-2.0
+- **Description**: HTTP client used to communicate with the MinerU API service.
+- **Repository**: https://github.com/seanmonstar/reqwest
+
+## rusqlite
+
+- **License**: MIT / Apache-2.0
+- **Description**: SQLite bindings for Rust (bundled SQLite).
+- **Repository**: https://github.com/rusqlite/rusqlite
+
+## scraper
+
+- **License**: MIT / Apache-2.0
+- **Description**: HTML parsing and scraping library (used by the web extractor).
+- **Repository**: https://github.com/outrider-oss/scraper
+
+## chrono
+
+- **License**: Apache-2.0 / MIT
+- **Description**: Date and time library.
+- **Repository**: https://github.com/chronotope/chrono
+
+## uuid
+
+- **License**: Apache-2.0 / MIT
+- **Description**: UUID generation.
+- **Repository**: https://github.com/uuid-rs/uuid
+
+## React
 
 - **License**: MIT
-- **Description**: Cross-platform inference engine for machine learning models.
-- **Website**: https://onnxruntime.ai
+- **Description**: Frontend UI library.
+- **Website**: https://react.dev
 
-## lopdf
+## Tailwind CSS
 
 - **License**: MIT
-- **Description**: PDF document manipulation library used for embedded image extraction.
-- **Repository**: https://github.com/J-F-Liu/lopdf
+- **Description**: Utility-first CSS framework.
+- **Website**: https://tailwindcss.com

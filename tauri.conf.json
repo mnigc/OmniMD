@@ -30,7 +30,6 @@
         "installMode": "currentUser"
       }
     },
-    "icon": ["icons/icon.ico"],
-    "resources": ["ocr_resources"]
+    "icon": ["icons/icon.ico"]
   }
 }

@@ -4,12 +4,15 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Edit,
+  Eye,
   FileText,
   Folder,
   FolderOpen,
   LibraryBig,
   Plus,
   RefreshCw,
+  Save,
   Search,
   Star,
   Trash2,
@@ -34,6 +37,9 @@ import {
 } from "../api/tauriApi";
 import { pickDir } from "../api/dialogs";
 import { MarkdownPreview } from "../components/MarkdownPreview";
+import { MarkdownEditor } from "../components/MarkdownEditor";
+import { useAutoSave } from "../hooks/useAutoSave";
+import { writeTextFile } from "../api/tauriApi";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -108,8 +114,9 @@ export function LibraryPage() {
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
   const [selectedDoc, setSelectedDoc] = useState<LibraryDocument | null>(null);
 
-  // Preview
+  // Preview / Edit
   const [previewContent, setPreviewContent] = useState("");
+  const [libraryViewMode, setLibraryViewMode] = useState<"preview" | "edit">("preview");
 
   // Search
   const [query, setQuery] = useState("");
@@ -351,6 +358,9 @@ export function LibraryPage() {
     setQuery("");
     setSearchHits(null);
   }
+
+  const editorFilePath = selectedDoc && activeWs ? joinPath(activeWs.path, selectedDoc.path) : null;
+  const { saving: librarySaving, saveNow: librarySaveNow } = useAutoSave(previewContent, libraryViewMode === "edit" ? editorFilePath : null);
 
   const tabs: { id: ViewMode; label: string }[] = [
     { id: "browse", label: t("library.allDocs") },
@@ -673,6 +683,16 @@ export function LibraryPage() {
                     )}
                     onClick={() => toggleFavorite(selectedDoc)}
                   />
+                  <button
+                    onClick={() => setLibraryViewMode((m) => (m === "preview" ? "edit" : "preview"))}
+                    className="h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    title={libraryViewMode === "preview" ? t("editor.editMode") : t("editor.previewMode")}
+                  >
+                    {libraryViewMode === "preview" ? <Edit size={14} /> : <Eye size={14} />}
+                  </button>
+                  {libraryViewMode === "edit" && librarySaving && (
+                    <span className="text-xs text-muted-foreground ml-auto">{t("editor.saving")}</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1 min-w-0">
                   <span className="truncate">{selectedDoc.path}</span>
@@ -691,7 +711,11 @@ export function LibraryPage() {
                 </div>
               </div>
               <div className="flex-1 overflow-auto">
-                <MarkdownPreview content={previewContent} />
+                {libraryViewMode === "edit" ? (
+                  <MarkdownEditor value={previewContent} onChange={setPreviewContent} />
+                ) : (
+                  <MarkdownPreview content={previewContent} />
+                )}
               </div>
             </>
           ) : (

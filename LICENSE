@@ -1,0 +1,39 @@
+# OmniMD License
+
+OmniMD is distributed under the **Apache License 2.0**.
+
+Copyright 2024–2025 OmniMD Contributors
+
+## Dependencies & Their Licenses
+
+This application relies on third-party software. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
+for the complete list of dependencies, their licenses, and notices.
+
+## MinerU Integration
+
+OmniMD ships with the official [MinerU](https://github.com/opendatalab/MinerU) engine
+(`mineru-api` FastAPI service) as its sole document-to-Markdown parser. MinerU is
+distributed under the **Apache License 2.0** with additional terms. When OmniMD
+starts, it downloads the required MinerU models from official sources
+(HuggingFace / ModelScope) — users must review and accept the model license
+terms at download time.
+
+MinerU license file must be placed alongside this file as `LICENSE.MinerU`
+before distributing OmniMD in any form.
+
+> **TODO before release**: Place the full MinerU license text in `LICENSE.MinerU`
+> and verify all model licenses against the terms agreed at download time.
+
+## Apache License 2.0
+
+```text
+                              Apache License
+                        Version 2.0, January 2004
+                     http://www.apache.org/licenses/
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+...
+```
+
+See the full text at: <https://www.apache.org/licenses/LICENSE-2.0>

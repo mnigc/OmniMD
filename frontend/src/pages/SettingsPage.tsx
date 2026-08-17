@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useState } from "react";
-import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Sparkles, Cpu } from "lucide-react";
+import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Sparkles, Cpu, Database } from "lucide-react";
 import { useI18n } from "../i18n";
 import { type ThemeMode } from "../lib/theme";
 import { useThemeMode } from "../hooks/useThemeMode";
@@ -10,9 +10,12 @@ import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { mineruStatus, startMineru, type MineruStatus } from "../api/tauriApi";
+import { mineruStatus, startMineru, getAppVersion, type MineruStatus } from "../api/tauriApi";
 import { pickOutputDir } from "../api/dialogs";
 import type { ParseQuality } from "../types";
+import { useModelStore } from "../store/useModelStore";
+import { ModelCard } from "../components/ModelCard";
+import { ModelCacheSection } from "../components/ModelCacheSection";
 
 const themeOptions: {
   value: ThemeMode;
@@ -85,17 +88,35 @@ export function SettingsPage() {
     aiEnabled,
     aiReadyToc,
     aiReadyMeta,
+    allowOnline,
     setDefaultOutputDir,
     setRecursive,
     setKeepStructure,
     setAiEnabled,
     setAiReadyToc,
     setAiReadyMeta,
+    setAllowOnline,
   } = useSettingsStore();
 
   const [mineruInfo, setMineruInfo] = useState<MineruStatus | null>(null);
   const [mineruStarting, setMineruStarting] = useState(false);
   const [mineruError, setMineruError] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState<string>("v0.1.0");
+
+  const { models, refreshModels, refreshCacheInfo, refreshModelSource, listenForProgress } = useModelStore();
+
+  useEffect(() => {
+    getAppVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshModels();
+    refreshCacheInfo();
+    refreshModelSource();
+    let cleanup: (() => void) | null = null;
+    listenForProgress().then((fn) => { cleanup = fn; });
+    return () => { cleanup?.(); };
+  }, [refreshModels, refreshCacheInfo, refreshModelSource, listenForProgress]);
 
   const refreshMineruStatus = useCallback(async () => {
     try {
@@ -268,6 +289,25 @@ export function SettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
+              <Database size={16} />
+              {t("model.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {models.map((model) => (
+                <ModelCard key={model.name} model={model} />
+              ))}
+              <div className="border-t border-border pt-4 mt-4">
+                <ModelCacheSection />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
               <Sparkles size={16} />
               {t("settings.ai")}
             </CardTitle>
@@ -294,9 +334,9 @@ export function SettingsPage() {
               />
               <ToggleRow
                 label={t("settings.allowOnline")}
-                checked={false}
-                disabled
-                hint={t("common.comingSoon")}
+                checked={allowOnline}
+                onChange={setAllowOnline}
+                hint={t("settings.allowOnlineHint")}
               />
             </div>
           </CardContent>
@@ -322,7 +362,7 @@ export function SettingsPage() {
           </CardHeader>
           <CardContent>
             <div className="flex flex-col divide-y divide-border">
-              <InfoRow label={t("settings.version")}>v0.2.0</InfoRow>
+              <InfoRow label={t("settings.version")}>{appVersion}</InfoRow>
               <InfoRow label={t("settings.techStack")}>
                 React 18 · TypeScript · Tauri 2 · Tailwind CSS
               </InfoRow>

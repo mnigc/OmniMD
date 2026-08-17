@@ -10,7 +10,7 @@
 
 PDF、Word、Excel、PowerPoint、EPUB、HTMLなど、さまざまなドキュメントをクリーンなMarkdownに変換するクロスプラットフォーム・デスクトップアプリケーションです。
 
-**Tauri 2** + **Rust** + **React** で構築され、コア変換エンジンは [`anydoc`](https://crates.io/crates/anydoc) が提供します。
+**Tauri 2** + **Rust** + **React** で構築され、コア変換エンジンは [MinerU](https://github.com/opendatalab/MinerU) 3.x が提供します。
 
 </div>
 
@@ -87,7 +87,7 @@ OmniMD/
 │   ├── lib.rs              # Tauri コマンド登録（フロントエンド API）
 │   ├── pipeline.rs         # 変換パイプライン（読込 → 変換 → 書出）
 │   ├── file_utils.rs       # パスヘルパー / フォーマットホワイトリスト
-│   ├── converters/         # anydoc 変換器の実装
+│   ├── engine/           # MinerU エンジン統合 (HTTP client + ランタイム管理)
 │   └── models/             # Document / Task / Asset データ構造
 ├── frontend/               # React + TypeScript フロントエンド
 │   ├── src/
@@ -111,10 +111,8 @@ OmniMD/
 | コマンド | パラメータ | 戻り値 | 説明 |
 |----------|-----------|--------|------|
 | `convert_file` | `sourcePath`, `outputDir` | `ConversionResult` | 単一ファイル変換 |
-| `convert_batch` | `sourcePaths`, `outputDir`, `concurrency` | `BatchResult` | バッチ並行変換 |
 | `get_supported_formats` | — | `string[]` | 対応拡張子リスト |
 | `get_converter_info` | — | `ConverterInfo` | 変換器名と対応フォーマット |
-| `preview_markdown` | `markdown` | `string` | プレビューエンドポイント（現在パススルー） |
 
 変換中の進捗は Tauri イベント `task-progress` / `task-status` でプッシュされ、フロントエンドはこれをリッスンしてリアルタイム UI を更新します。
 
@@ -136,7 +134,7 @@ cd frontend && pnpm build
 |----------|------|
 | デスクトップフレームワーク | Tauri 2 |
 | バックエンド言語 | Rust 2021 edition |
-| 変換エンジン | [anydoc](https://crates.io/crates/anydoc) 0.1 |
+| 変換エンジン | [MinerU](https://github.com/opendatalab/MinerU) 3.x (via `mineru-api`) |
 | 非同期ランタイム | tokio |
 | フロントエンドフレームワーク | React 18 + TypeScript 5 |
 | ビルドツール | Vite 5 |
@@ -150,7 +148,7 @@ TODO: LICENSE ファイルを追加（MIT または Apache-2.0 を推奨）。
 
 ## 🗺️ ロードマップ
 
-- [x] Phase 1 MVP — 単一ファイル / バッチ変換、anydoc エンジン統合
+- [x] Phase 1 MVP — 単一ファイル / バッチ変換、MinerU エンジン統合
 - [ ] Settings ページ（出力フォーマット、並行数、OCR トグル）
 - [ ] OCR 画像テキスト認識（モデル構造は `src/models/ocr.rs` に予約済み）
 - [ ] ドラッグ＆ドロップのフォルダ再帰変換

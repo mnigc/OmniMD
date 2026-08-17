@@ -1,5 +1,7 @@
 pub mod mineru_engine;
 pub mod mineru_runtime;
+pub mod batch_queue;
+pub mod model_manager;
 
 use crate::models::ocr::{Cancellation, ProgressCallback};
 use crate::models::task::{ConversionError, ConversionResult, ConversionTask};

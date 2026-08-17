@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   Eye,
   Clock,
@@ -22,7 +22,13 @@ import { SidebarNavItem } from "./components/SidebarNavItem";
 import { WindowControls } from "./components/WindowControls";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
-import { ToastPortal } from "./lib/toast";
+import { getAppVersion, getDefaultOutputDir, getActiveWorkspace, writeTextFile, scanWorkspace } from "./api/tauriApi";
+import { ToastPortal, showToast } from "./lib/toast";
+import { useTaskStore } from "./store/useTaskStore";
+import { useBatchStore } from "./store/useBatchStore";
+import { BatchTaskPanel } from "./components/BatchTaskPanel";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 
 type Page = "home" | "library" | "convert" | "history" | "settings";
 
@@ -30,6 +36,47 @@ export function App() {
   const { t } = useI18n();
   const [page, setPage] = useState<Page>("home");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [appVersion, setAppVersion] = useState("v0.1.0");
+  const [batchPanelOpen, setBatchPanelOpen] = useState(false);
+
+  useEffect(() => {
+    getAppVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
+  // Listen for shell-context-menu argv: convert files and auto-ingest into library.
+  useEffect(() => {
+    const win = getCurrentWebviewWindow();
+    let unlisten: (() => void) | null = null;
+
+    (async () => {
+      try {
+        unlisten = await win.listen<string[]>("argv-files", async (event) => {
+          const files = event.payload.filter((f) => f.trim().length > 0);
+          if (files.length === 0) return;
+
+          const outputDir = await getDefaultOutputDir();
+          const batchStore = useBatchStore.getState();
+          for (const file of files) {
+            const fileName = file.split(/[\\/]/).pop() || "output";
+            const outputName = fileName.replace(/\.[^.]+$/, ".md");
+            const outputPath = `${outputDir}/${outputName}`;
+            await batchStore.enqueue(file, outputPath, "aiReady");
+          }
+          showToast(
+            `${files.length} file${files.length > 1 ? "s" : ""} queued for conversion`,
+            2000,
+          );
+          await batchStore.start();
+        });
+      } catch {
+        // Not running in Tauri
+      }
+    })();
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     applyTheme();
@@ -40,6 +87,27 @@ export function App() {
     });
     return cleanup;
   }, []);
+
+  const handleNewMarkdown = useCallback(async () => {
+    const ws = await getActiveWorkspace();
+    if (!ws) { showToast(t("editor.newFileHint")); return; }
+    const name = `untitled-${Date.now()}.md`;
+    const path = `${ws.path}/${name}`;
+    try {
+      await writeTextFile(path, "# Untitled\n\n");
+      await scanWorkspace(ws.id);
+      showToast(t("editor.newFileCreated"));
+    } catch {
+      showToast("Failed to create file", 3000);
+    }
+  }, [t]);
+
+  useGlobalShortcuts({
+    O: () => { setPage("home"); },
+    N: () => handleNewMarkdown(),
+    P: () => { setPage("library"); },
+    "Shift+F": () => { setPage("library"); },
+  });
 
   const renderPage = () => {
     switch (page) {
@@ -80,7 +148,20 @@ export function App() {
             OmniMD - Anything to Markdown
           </span>
         </div>
-        <div className="ml-auto flex items-center gap-2"></div>
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              useBatchStore.getState().refreshTasks();
+              useBatchStore.getState().refreshSummary();
+              setBatchPanelOpen(true);
+            }}
+            className="text-xs gap-1.5"
+          >
+            {t("batch.title")}
+          </Button>
+        </div>
         <WindowControls />
       </header>
 
@@ -88,7 +169,7 @@ export function App() {
         <aside
           className={cn(
             "shrink-0 border-r border-border bg-muted/40 p-3 flex flex-col gap-1 overflow-hidden transition-all duration-250 ease-out",
-            sidebarOpen ? "w-52" : "w-0"
+            sidebarOpen ? "w-52" : "w-14"
           )}
         >
            <nav className="flex flex-col gap-0.5 flex-shrink-0">
@@ -97,24 +178,28 @@ export function App() {
               label={t("nav.home")}
               active={page === "home"}
               onClick={() => setPage("home")}
+              collapsed={!sidebarOpen}
             />
             <SidebarNavItem
               icon={<LibraryBig size={16} />}
               label={t("nav.library")}
               active={page === "library"}
               onClick={() => setPage("library")}
+              collapsed={!sidebarOpen}
             />
             <SidebarNavItem
               icon={<Clock size={16} />}
               label={t("nav.history")}
               active={page === "history"}
               onClick={() => setPage("history")}
+              collapsed={!sidebarOpen}
             />
             <SidebarNavItem
               icon={<Eye size={16} />}
               label={t("nav.convert")}
               active={page === "convert"}
               onClick={() => setPage("convert")}
+              collapsed={!sidebarOpen}
             />
           </nav>
 
@@ -124,19 +209,24 @@ export function App() {
               label={t("nav.settings")}
               active={page === "settings"}
               onClick={() => setPage("settings")}
+              collapsed={!sidebarOpen}
             />
-            <div className="px-3 pt-2 border-t border-border text-xs text-muted-foreground">
+            <div className={cn("px-3 pt-2 border-t border-border text-xs text-muted-foreground", !sidebarOpen && "hidden")}>
               <div className="flex justify-between mb-0.5">
                 <span>{t("home.phase1Mvp")}</span>
-                <span>v0.1.0</span>
+                <span>{appVersion}</span>
               </div>
-              <div className="opacity-70 truncate">{t("home.anydocTauri")}</div>
+              <div className="opacity-70 truncate">{t("home.minerUTauri")}</div>
             </div>
           </div>
         </aside>
 
         <main className="flex-1 overflow-hidden">{renderPage()}</main>
       </div>
+      <BatchTaskPanel
+        open={batchPanelOpen}
+        onClose={() => setBatchPanelOpen(false)}
+      />
       <ToastPortal />
     </div>
   );

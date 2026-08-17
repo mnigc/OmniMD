@@ -1,3 +1,4 @@
+use std::io::BufRead;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -63,13 +64,13 @@ impl MinerURuntime {
         #[cfg(not(target_os = "windows"))]
         let program = "mineru-api";
 
-        let child = Command::new(program)
+        let mut child = Command::new(program)
             .arg("--host")
             .arg("127.0.0.1")
             .arg("--port")
             .arg(self.port.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
                 format!(
@@ -78,8 +79,39 @@ impl MinerURuntime {
                 )
             })?;
 
+        let stdout = child.stdout.take().expect("child stdout should be piped");
+        let stderr = child.stderr.take().expect("child stderr should be piped");
+
+        // Spawn a background task that reads both stdout and stderr on a
+        // blocking thread (the underlying handle is std::io, not async) and
+        // forwards each non-empty line to the `tracing` logger. Errors and
+        // EOF end the task; the process is gone or broken at that point.
+        let _ = tokio::task::spawn_blocking(move || {
+            MinerURuntime::read_stdio(stdout, "mineru-api stdout");
+            MinerURuntime::read_stdio(stderr, "mineru-api stderr");
+        });
+
         *self.child.lock().unwrap() = Some(child);
         Ok(())
+    }
+
+    /// Reads a std::io::Read stream line-by-line on a blocking thread and
+    /// forwards each non-empty line to the `tracing` logger. EOF or read
+    /// errors end the loop.
+    fn read_stdio<R: std::io::Read>(stream: R, stream_name: &str) {
+        let reader = std::io::BufReader::new(stream);
+        for line in reader.lines() {
+            match line {
+                Ok(l) if !l.is_empty() => {
+                    info!("[{}] {}", stream_name, l);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("[{}] read error: {}", stream_name, e);
+                    break;
+                }
+            }
+        }
     }
 
     /// Poll `GET /health` until ready or timeout.

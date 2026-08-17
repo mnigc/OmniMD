@@ -10,6 +10,10 @@ import type {
   LibraryFolder,
   SearchHit,
   ScanResult,
+  BatchTaskDto,
+  BatchSummaryDto,
+  ModelInfo,
+  CacheInfo,
 } from "../types";
 
 export async function convertFile(
@@ -59,8 +63,8 @@ export async function getConverterInfo(): Promise<ConverterInfo> {
   return JSON.parse(raw);
 }
 
-export async function previewMarkdown(markdown: string): Promise<string> {
-  return invoke<string>("preview_markdown", { markdown });
+export async function getAppVersion(): Promise<string> {
+  return invoke<string>("get_app_version");
 }
 
 export async function writeTextFile(
@@ -185,4 +189,102 @@ export async function searchDocuments(
     workspaceId,
     limit: limit ?? 50,
   });
+}
+
+// ---- Batch task API ----
+
+export async function batchEnqueue(
+  sourcePath: string,
+  outputPath: string,
+  outputMode?: OutputMode,
+  parseQuality?: ParseQuality
+): Promise<string> {
+  return invoke<string>("batch_enqueue", {
+    sourcePath,
+    outputPath,
+    outputMode: outputMode ?? null,
+    parseQuality: parseQuality ?? null,
+  });
+}
+
+export async function batchStart(): Promise<void> {
+  return invoke<void>("batch_start");
+}
+
+export async function batchPauseTask(taskId: string): Promise<void> {
+  return invoke<void>("batch_pause_task", { taskId });
+}
+
+export async function batchResumeTask(taskId: string): Promise<void> {
+  return invoke<void>("batch_resume_task", { taskId });
+}
+
+export async function batchCancelTask(taskId: string): Promise<void> {
+  return invoke<void>("batch_cancel_task", { taskId });
+}
+
+export async function batchCancelAll(): Promise<void> {
+  return invoke<void>("batch_cancel_all");
+}
+
+export async function batchRetryFailed(): Promise<void> {
+  return invoke<void>("batch_retry_failed");
+}
+
+export async function batchClearDone(): Promise<void> {
+  return invoke<void>("batch_clear_done");
+}
+
+export async function batchSetConcurrency(concurrency: number): Promise<void> {
+  return invoke<void>("batch_set_concurrency", { concurrency });
+}
+
+export async function batchListTasks(): Promise<BatchTaskDto[]> {
+  return invoke<BatchTaskDto[]>("batch_list_tasks");
+}
+
+export async function batchGetSummary(): Promise<BatchSummaryDto> {
+  return invoke<BatchSummaryDto>("batch_get_summary");
+}
+
+// ---- Model management API ----
+
+export async function listModels(): Promise<ModelInfo[]> {
+  return invoke<ModelInfo[]>("list_models");
+}
+
+export async function getModelStatus(modelName: string): Promise<ModelInfo> {
+  return invoke<ModelInfo>("get_model_status", { modelName });
+}
+
+export async function downloadModel(modelName: string): Promise<void> {
+  return invoke<void>("download_model", { modelName });
+}
+
+export async function cancelModelDownload(): Promise<void> {
+  return invoke<void>("cancel_model_download");
+}
+
+export async function getCacheInfo(): Promise<CacheInfo> {
+  return invoke<CacheInfo>("get_cache_info");
+}
+
+export async function clearModelCache(): Promise<void> {
+  return invoke<void>("clear_model_cache");
+}
+
+export async function setModelSource(source: string): Promise<void> {
+  return invoke<void>("set_model_source", { source });
+}
+
+export async function getModelSource(): Promise<string> {
+  return invoke<string>("get_model_source");
+}
+
+export async function importOfflineModel(path: string): Promise<void> {
+  return invoke<void>("import_offline_model", { path });
+}
+
+export async function checkModelUpdate(modelName: string): Promise<boolean> {
+  return invoke<boolean>("check_model_update", { modelName });
 }

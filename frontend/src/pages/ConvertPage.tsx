@@ -4,7 +4,6 @@ import {
   FileDown,
   FolderOpen,
   LayoutTemplate,
-  Maximize2,
   Code,
   Eye,
   RefreshCw,
@@ -12,12 +11,18 @@ import {
   Loader2,
   AlertCircle,
   Image as ImageIcon,
+  Save,
   Table as TableIcon,
   Type,
 } from "lucide-react";
+import { EditorView } from "@codemirror/view";
 import { MarkdownPreview } from "../components/MarkdownPreview";
+import { MarkdownEditor } from "../components/MarkdownEditor";
+import { EditorToolbar } from "../components/EditorToolbar";
 import { SegmentedControl } from "../components/SegmentedControl";
+import { useAutoSave } from "../hooks/useAutoSave";
 import { useTaskStore } from "../store/useTaskStore";
+import { useBatchStore } from "../store/useBatchStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useI18n } from "../i18n";
 import { Button } from "../components/ui/button";
@@ -33,7 +38,7 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip";
 
-type ViewMode = "edit" | "preview" | "split";
+type ViewMode = "source" | "preview" | "split";
 
 const SPLIT_RATIO_KEY = "omnimd_split_ratio";
 const MIN_SPLIT_RATIO = 0.2;
@@ -254,16 +259,14 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
   const {
     currentTask,
     currentResult,
-    finalizeTask,
     setCurrentTask,
-    addTasks,
-    failTask,
     previewSource,
   } = useTaskStore();
   const { outputMode, buildAiReadyOpts } = useSettingsStore();
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [markdown, setMarkdown] = useState("");
   const [reconverting, setReconverting] = useState(false);
+  const editorRef = useRef<EditorView | null>(null);
 
   const isHistoryMode = previewSource === "history";
 
@@ -278,6 +281,9 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
     localStorage.setItem(SPLIT_RATIO_KEY, String(ratio));
   };
 
+  const autoSavePath = currentResult?.outputPath || currentTask?.outputPath || null;
+  const { saving, saveNow } = useAutoSave(markdown, autoSavePath);
+
   const stats: ConversionStats | undefined = currentResult?.stats;
   const fileName =
     currentTask?.sourcePath.split(/[\\/]/).pop() || currentTask?.sourcePath || "";
@@ -290,12 +296,23 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
     }
   }, [currentResult]);
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        saveNow();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [saveNow]);
+
   const viewOptions: {
     value: ViewMode;
     icon: React.ReactNode;
     label: string;
   }[] = [
-    { value: "edit", icon: <Code size={16} />, label: t("convert.editOnly") },
+    { value: "source", icon: <Code size={16} />, label: t("editor.sourceMode") },
     {
       value: "preview",
       icon: <Eye size={16} />,
@@ -353,7 +370,12 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
           </Tooltip>
         </div>
 
-        <div className="ml-auto">
+        <div className="flex items-center gap-2 ml-auto">
+          {autoSavePath && (
+            <span className="text-xs text-muted-foreground">
+              {saving ? t("editor.saving") : t("editor.saved")}
+            </span>
+          )}
           <SegmentedControl
             options={viewOptions}
             value={viewMode}
@@ -364,7 +386,7 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {(viewMode === "edit" || viewMode === "split") && (
+        {(viewMode === "source" || viewMode === "split") && (
           <div
             className={`flex flex-col min-w-0 ${viewMode === "split" ? "border-r border-border" : ""}`}
             style={
@@ -373,18 +395,14 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                 : { flex: "1 1 0%" }
             }
           >
-            <div className="h-9 border-b border-border px-3 flex items-center gap-2 bg-muted/30">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t("convert.markdown")}
-              </span>
+            <EditorToolbar view={editorRef.current} />
+            <div className="flex-1 overflow-hidden">
+              <MarkdownEditor
+                value={markdown}
+                onChange={setMarkdown}
+                onViewReady={(v) => { editorRef.current = v; }}
+              />
             </div>
-            <textarea
-              className="flex-1 p-4 text-sm font-mono resize-none focus:outline-none bg-transparent"
-              value={markdown}
-              onChange={(e) => setMarkdown(e.target.value)}
-              placeholder={t("convert.markdownPlaceholder")}
-              spellCheck={false}
-            />
           </div>
         )}
 
@@ -543,14 +561,16 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                   outputMode,
                   buildAiReadyOpts(),
                 );
-                const placeholders = addTasks([sourcePath], dir);
-                finalizeTask(placeholders[0].id, result.taskId, result, null);
+                const fileName = sourcePath.split(/[\\/]/).pop() || "output";
+                const outputName = fileName.replace(/\.[^.]+$/, ".md");
+                const outputPath = `${dir}/${outputName}`;
+                useBatchStore.getState().enqueue(sourcePath, outputPath, outputMode);
                 setCurrentTask(
                   {
                     id: result.taskId,
                     sourcePath: sourcePath,
                     outputDir: dir,
-                    outputPath: `${dir}/${sourcePath.split(/[\\/]/).pop()}`,
+                    outputPath,
                     outputMode,
                     status: "Completed",
                     progress: 1,
@@ -562,9 +582,7 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                   result,
                 );
               } catch (err: any) {
-                if (currentTask) {
-                  failTask(currentTask.id, err.message || String(err));
-                }
+                // ignore
               } finally {
                 setReconverting(false);
               }
@@ -581,15 +599,26 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
 
         <Separator orientation="vertical" className="h-6 mx-1" />
 
-        <Button
-          className="ml-auto opacity-50"
-          variant="outline"
-          size="sm"
-          disabled
-        >
-          <Maximize2 size={14} />
-          {t("convert.aiOptimize")}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              className="ml-auto"
+              variant="outline"
+              size="icon"
+              onClick={() => {
+                showToast(
+                  `${t("toast.aiReadyTip")}`,
+                  4000,
+                );
+              }}
+            >
+              <span className="text-xs font-bold">?</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="end" className="max-w-xs text-xs">
+            <p>{t("toast.aiReadyTip")}</p>
+          </TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );

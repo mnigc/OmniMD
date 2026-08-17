@@ -128,3 +128,73 @@ export interface ScanResult {
   removed: number;
   total: number;
 }
+
+// ---- Batch task types ----
+
+export interface BatchTaskDto {
+  id: string;
+  sourcePath: string;
+  outputPath: string;
+  status: string;
+  progress: number;
+  stage: string;
+  error: string | null;
+  createdAt: number;
+  completedAt: number | null;
+  elapsedSecs: number;
+  outputMode: OutputMode;
+  parseQuality: ParseQuality;
+  retryCount: number;
+}
+
+export interface BatchSummaryDto {
+  total: number;
+  pending: number;
+  processing: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  paused: number;
+}
+
+export interface BatchProgressEvent {
+  taskId: string;
+  progress: number;
+  stage: string;
+  elapsedSecs: number;
+}
+
+export interface BatchStatusEvent {
+  taskId: string;
+  status: string;
+  error: string | null;
+  elapsedSecs: number;
+}
+
+export interface BatchSummaryEvent {
+  summary: BatchSummaryDto;
+}
+
+// ---- Model management types ----
+
+export interface ModelInfo {
+  name: string;
+  displayName: string;
+  sizeBytes: number;
+  status: string;
+  path: string | null;
+  downloadUrl: string | null;
+  version: string | null;
+}
+
+export interface CacheInfo {
+  path: string;
+  totalSizeBytes: number;
+}
+
+export interface DownloadProgress {
+  modelName: string;
+  progress: number;
+  speed: string;
+  stage: string;
+}

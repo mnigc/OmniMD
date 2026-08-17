@@ -14,13 +14,15 @@ use std::time::Duration;
 use db::{
     db as db_handle, DocumentDto, FolderDto, ScanResultDto, SearchHitDto, WorkspaceDto,
 };
+use engine::batch_queue::BatchQueue;
 use engine::mineru_engine::MinerUEngine;
 use engine::mineru_runtime::MinerURuntime;
+use engine::model_manager::ModelManager;
 use engine::DocumentEngine;
 use models::ocr::{Cancellation, ProgressCallback};
 use models::task::{
-    AiReadyOpts, ConversionError, ConversionResult, ConversionTask, ErrorCode, TaskStatus,
-    OutputMode, ParseQuality,
+    AiReadyOpts, BatchSummaryDto, BatchTaskDto, ConversionError, ConversionResult, ConversionTask,
+    ErrorCode, TaskStatus, OutputMode, ParseQuality,
 };
 use models::ConversionStage;
 use serde::{Deserialize, Serialize};
@@ -101,6 +103,9 @@ struct AppState {
     tasks: Mutex<HashMap<String, ConversionTask>>,
     cancellations: Mutex<HashMap<String, Cancellation>>,
     runtime: Mutex<Option<Arc<MinerURuntime>>>,
+    queue_engine: Mutex<Option<Arc<MinerUEngine>>>,
+    batch_queue: BatchQueue,
+    model_manager: ModelManager,
 }
 
 impl Default for AppState {
@@ -109,6 +114,9 @@ impl Default for AppState {
             tasks: Mutex::new(HashMap::new()),
             cancellations: Mutex::new(HashMap::new()),
             runtime: Mutex::new(None),
+            queue_engine: Mutex::new(None),
+            batch_queue: BatchQueue::new(3),
+            model_manager: ModelManager::new(),
         }
     }
 }
@@ -123,6 +131,17 @@ impl AppState {
         let runtime = Arc::new(MinerURuntime::new(18628));
         *guard = Some(runtime.clone());
         runtime
+    }
+
+    /// Lazily create the MinerU engine for batch queue.
+    fn queue_engine(&self) -> Arc<MinerUEngine> {
+        let mut guard = self.queue_engine.lock().unwrap();
+        if let Some(e) = guard.as_ref() {
+            return e.clone();
+        }
+        let engine = Arc::new(MinerUEngine::new(self.mineru_runtime()));
+        *guard = Some(engine.clone());
+        engine
     }
 }
 
@@ -615,8 +634,8 @@ fn get_converter_info() -> String {
 }
 
 #[tauri::command]
-fn preview_markdown(markdown: String) -> String {
-    markdown
+fn get_app_version(app: tauri::AppHandle) -> String {
+    format!("v{}", app.package_info().version)
 }
 
 #[tauri::command]
@@ -688,6 +707,168 @@ async fn download_url(url: String) -> Result<String, String> {
     Ok(file_path.to_string_lossy().to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Batch task commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn batch_enqueue(
+    app: tauri::AppHandle,
+    source_path: String,
+    output_path: String,
+    output_mode: Option<String>,
+    parse_quality: Option<String>,
+) -> Result<String, String> {
+    let mode = output_mode
+        .as_deref()
+        .map(OutputMode::from_str)
+        .unwrap_or_default();
+    let quality = parse_quality
+        .as_deref()
+        .map(ParseQuality::from_str)
+        .unwrap_or_default();
+    let state = get_state(&app)?;
+    state
+        .batch_queue
+        .enqueue(app.clone(), source_path, output_path, mode, quality)
+        .await
+}
+
+#[tauri::command]
+async fn batch_start(app: tauri::AppHandle) -> Result<(), String> {
+    let engine = {
+        let state = get_state(&app)?;
+        state.queue_engine()
+    };
+    {
+        let state = get_state(&app)?;
+        state.batch_queue.set_engine(engine).await;
+        state.batch_queue.start(app.clone()).await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn batch_pause_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.batch_queue.pause_task(&app, &task_id).await
+}
+
+#[tauri::command]
+async fn batch_resume_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.batch_queue.resume_task(&app, &task_id).await
+}
+
+#[tauri::command]
+async fn batch_cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.batch_queue.cancel_task(&app, &task_id).await
+}
+
+#[tauri::command]
+async fn batch_cancel_all(app: tauri::AppHandle) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.batch_queue.cancel_all(&app).await
+}
+
+#[tauri::command]
+async fn batch_retry_failed(app: tauri::AppHandle) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.batch_queue.retry_failed(&app).await
+}
+
+#[tauri::command]
+async fn batch_clear_done(app: tauri::AppHandle) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.batch_queue.clear_done(&app).await
+}
+
+#[tauri::command]
+fn batch_set_concurrency(app: tauri::AppHandle, concurrency: u32) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.batch_queue.set_concurrency(concurrency);
+    Ok(())
+}
+
+#[tauri::command]
+fn batch_list_tasks(app: tauri::AppHandle) -> Result<Vec<BatchTaskDto>, String> {
+    use db::db as db_handle;
+    db_handle(&app)?.list_all_batch_tasks()
+}
+
+#[tauri::command]
+fn batch_get_summary(app: tauri::AppHandle) -> Result<BatchSummaryDto, String> {
+    use db::db as db_handle;
+    db_handle(&app)?.get_batch_summary()
+}
+
+// ---------------------------------------------------------------------------
+// Model management commands
+// ---------------------------------------------------------------------------
+
+use engine::model_manager::{ModelInfoDto, CacheInfoDto};
+
+#[tauri::command]
+async fn list_models(app: tauri::AppHandle) -> Result<Vec<ModelInfoDto>, String> {
+    let state = get_state(&app)?;
+    state.model_manager.list_models().await
+}
+
+#[tauri::command]
+async fn get_model_status(app: tauri::AppHandle, model_name: String) -> Result<ModelInfoDto, String> {
+    let state = get_state(&app)?;
+    state.model_manager.get_model_status(&model_name).await
+}
+
+#[tauri::command]
+async fn download_model(app: tauri::AppHandle, model_name: String) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.model_manager.download_model(&app, &model_name).await
+}
+
+#[tauri::command]
+async fn cancel_model_download(app: tauri::AppHandle) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.model_manager.cancel_download(&app).await
+}
+
+#[tauri::command]
+async fn get_cache_info(app: tauri::AppHandle) -> Result<CacheInfoDto, String> {
+    let state = get_state(&app)?;
+    state.model_manager.get_cache_info().await
+}
+
+#[tauri::command]
+async fn clear_model_cache(app: tauri::AppHandle) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.model_manager.clear_cache().await
+}
+
+#[tauri::command]
+async fn set_model_source(app: tauri::AppHandle, source: String) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.model_manager.set_source(source).await
+}
+
+#[tauri::command]
+async fn get_model_source(app: tauri::AppHandle) -> Result<String, String> {
+    let state = get_state(&app)?;
+    state.model_manager.get_source().await
+}
+
+#[tauri::command]
+async fn import_offline_model(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let state = get_state(&app)?;
+    state.model_manager.import_offline(&app, &path).await
+}
+
+#[tauri::command]
+async fn check_model_update(app: tauri::AppHandle, model_name: String) -> Result<bool, String> {
+    let state = get_state(&app)?;
+    state.model_manager.check_update(&model_name).await
+}
+
 pub fn run() {
     // Clean up leftover temp download files from previous runs.
     let temp_dir = std::env::temp_dir().join("omnimd_downloads");
@@ -695,9 +876,25 @@ pub fn run() {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
+    // Collect file-path CLI arguments (e.g. from a shell context menu or drag-drop).
+    let cli_args: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| {
+            let p = std::path::Path::new(a);
+            p.exists() && p.is_file()
+        })
+        .collect();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(move |app| {
+            // Forward file-path argv from the shell context menu to the frontend.
+            if !cli_args.is_empty() {
+                let _ = app.emit("argv-files", &cli_args);
+            }
+            Ok(())
+        })
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             convert_file,
@@ -709,7 +906,7 @@ pub fn run() {
             open_folder,
             get_supported_formats,
             get_converter_info,
-            preview_markdown,
+            get_app_version,
             write_text_file,
             read_text_file,
             list_files_in_folder,
@@ -727,6 +924,27 @@ pub fn run() {
             set_document_favorite,
             record_document_open,
             search_documents,
+            batch_enqueue,
+            batch_start,
+            batch_pause_task,
+            batch_resume_task,
+            batch_cancel_task,
+            batch_cancel_all,
+            batch_retry_failed,
+            batch_clear_done,
+            batch_set_concurrency,
+            batch_list_tasks,
+            batch_get_summary,
+            list_models,
+            get_model_status,
+            download_model,
+            cancel_model_download,
+            get_cache_info,
+            clear_model_cache,
+            set_model_source,
+            get_model_source,
+            import_offline_model,
+            check_model_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

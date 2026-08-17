@@ -1,7 +1,5 @@
 ﻿import { useCallback, useEffect, useState } from "react";
 import {
-  AlertTriangle,
-  CheckCircle2,
   Folder, FolderOpen,
   Inbox,
   Link,
@@ -10,7 +8,9 @@ import {
   RotateCcw,
   Trash2,
   X,
+  CheckCircle2,
   XCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { DropZone } from "../components/DropZone";
 import { TaskItem } from "../components/TaskItem";
@@ -24,7 +24,7 @@ import {
 } from "../api/tauriApi";
 import { pickOutputDir } from "../api/dialogs";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { useTaskStore } from "../store/useTaskStore";
+import { useBatchStore } from "../store/useBatchStore";
 import type { ConversionTask } from "../types";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useI18n } from "../i18n";
@@ -48,22 +48,11 @@ import {
 
 export function HomePage() {
   const { t } = useI18n();
-  const {
-    sessionTasks,
-    sessionConverting,
-    sessionCancelling,
-    removeFromSession,
-    clearSession,
-    startConversion,
-    cancelConversion,
-    retryFailed,
-  } = useTaskStore();
-  const { outputMode, defaultOutputDir } = useSettingsStore();
+  const { tasks, summary, start, loading, cancelAll, retryFailed, clearDone, enqueue, setPanelOpen } = useBatchStore();
+  const { outputMode, defaultOutputDir, allowOnline } = useSettingsStore();
 
   const [outputDir, setOutputDir] = useState(defaultOutputDir);
-  const [outputLocationMode, setOutputLocationMode] = useState<
-    "sourceDir" | "custom"
-  >("sourceDir");
+  const [outputLocationMode, setOutputLocationMode] = useState<"sourceDir" | "custom">("sourceDir");
   const [supportedFormats, setSupportedFormats] = useState<string[]>([]);
   const [urlInput, setUrlInput] = useState("");
   const [downloading, setDownloading] = useState(false);
@@ -71,9 +60,6 @@ export function HomePage() {
 
   useEffect(() => {
     getSupportedFormats().then(setSupportedFormats).catch(() => {});
-
-    // Seed the default output directory from the backend (install dir / output)
-    // only once, so it survives across sessions via localStorage.
     (async () => {
       try {
         const state = useSettingsStore.getState();
@@ -81,7 +67,7 @@ export function HomePage() {
         const dir = await getDefaultOutputDir();
         if (dir) state.setDefaultOutputDir(dir);
       } catch {
-        // ignore 闁?user will still be able to pick a directory
+        // ignore
       }
     })();
   }, []);
@@ -89,33 +75,28 @@ export function HomePage() {
   useEffect(() => {
     if (outputLocationMode === "custom" && !outputDir)
       setOutputDir(defaultOutputDir);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultOutputDir, outputLocationMode]);
 
   const inferOutputDir = useCallback(
     (path: string): string => {
       if (outputLocationMode === "custom") return outputDir || ".";
-      return (
-        path.replace(/\\/g, "/").split("/").slice(0, -1).join("/") || "."
-      );
+      return path.replace(/\\/g, "/").split("/").slice(0, -1).join("/") || ".";
     },
     [outputDir, outputLocationMode]
   );
 
   const handleFiles = useCallback(
-    (paths: string[]) => {
+    async (paths: string[]) => {
       if (paths.length === 0) return;
-      const state = useTaskStore.getState();
-      const dirs = paths.map((p) => inferOutputDir(p));
-      const hasTerminal = state.sessionTasks.some((tsk) =>
-        ["Completed", "Failed", "Cancelled"].includes(tsk.status)
-      );
-      if (!state.sessionConverting && hasTerminal) {
-        state.clearSession();
+      for (const path of paths) {
+        const dir = inferOutputDir(path);
+        const fileName = path.split(/[\\/]/).pop() || "output";
+        const outputName = fileName.replace(/\.[^.]+$/, ".md");
+        const outputPath = `${dir}/${outputName}`;
+        await enqueue(path, outputPath, outputMode);
       }
-      state.addToSession(paths, dirs, outputMode);
     },
-    [inferOutputDir, outputMode]
+    [inferOutputDir, outputMode, enqueue]
   );
 
   const addInputPaths = useCallback(async (paths: string[]) => {
@@ -130,12 +111,7 @@ export function HomePage() {
     }
     const unique = [...new Set(expanded)];
     if (unique.length === 0) return;
-    const existingPaths = new Set(
-      useTaskStore.getState().sessionTasks.map((t) => t.sourcePath)
-    );
-    const toAdd = unique.filter((p) => !existingPaths.has(p));
-    if (toAdd.length === 0) return;
-    handleFiles(toAdd);
+    handleFiles(unique);
   }, [handleFiles]);
 
   const handleFolder = useCallback(
@@ -154,66 +130,40 @@ export function HomePage() {
   const handleOpenOutputDir = useCallback(async () => {
     try {
       await openFolder(outputDir);
-    } catch (err: any) {
-      // The underlying shell will surface its own error to the user; keep
-      // the UI quiet on the frontend side to avoid duplicate toasts.
-      void err;
+    } catch {
+      // ignore
     }
   }, [outputDir]);
 
   const handleUrlSubmit = useCallback(async () => {
     const url = urlInput.trim();
     if (!url) return;
+    if (!allowOnline) {
+      setUrlError(t("home.urlNotAllowed"));
+      return;
+    }
     setDownloading(true);
     setUrlError("");
     try {
-      const state = useTaskStore.getState();
       const dir = inferOutputDir(url);
-      const hasTerminal = state.sessionTasks.some((tsk) =>
-        ["Completed", "Failed", "Cancelled"].includes(tsk.status)
-      );
-      if (!state.sessionConverting && hasTerminal) {
-        state.clearSession();
-      }
       const urlName = url.split("/").pop()?.split("?")[0] || "page";
       const outputName = urlName.replace(/\.[^.]+$/, "") + ".md";
-      const task: ConversionTask = {
-        id: `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        sourcePath: url,
-        outputDir: dir,
-        outputPath: `${dir}/${outputName}`,
-        outputMode,
-        status: "Pending",
-        progress: 0,
-        stage: "Fetching",
-        error: null,
-        createdAt: Date.now(),
-        completedAt: null,
-      };
-      state.addToSession([url], [dir], outputMode);
+      const outputPath = `${dir}/${outputName}`;
+      await enqueue(url, outputPath, outputMode);
       setUrlInput("");
     } catch (err: any) {
       setUrlError(err.message || String(err));
     } finally {
       setDownloading(false);
     }
-  }, [urlInput, outputMode, inferOutputDir]);
+  }, [urlInput, outputMode, inferOutputDir, allowOnline, enqueue, t]);
 
-  const handleStart = useCallback(() => {
-    startConversion();
-  }, [startConversion]);
-
-  const totalTasks = sessionTasks.length;
-  const processingCount = sessionTasks.filter(
-    (tsk) => tsk.status === "Processing"
-  ).length;
-  const completedCount = sessionTasks.filter(
-    (tsk) => tsk.status === "Completed"
-  ).length;
-  const failedCount = sessionTasks.filter((tsk) => tsk.status === "Failed").length;
-  const pendingCount = sessionTasks.filter(
-    (tsk) => tsk.status === "Pending"
-  ).length;
+  const previewTasks = tasks.filter((t) => t.status === "Pending" || t.status === "Processing").slice(0, 5);
+  const totalTasks = tasks.length;
+  const pendingCount = tasks.filter((t) => t.status === "Pending").length;
+  const processingCount = tasks.filter((t) => t.status === "Processing").length;
+  const completedCount = tasks.filter((t) => t.status === "Completed").length;
+  const failedCount = tasks.filter((t) => t.status === "Failed").length;
   const hasTerminal = completedCount + failedCount > 0;
 
   return (
@@ -221,27 +171,16 @@ export function HomePage() {
       <div className="flex-1 p-6 overflow-auto">
         <div className="max-w-5xl mx-auto w-full flex flex-col gap-6">
           <div className="text-center mb-2">
-            <h1 className="text-xl font-semibold tracking-tight">
-              {t("home.title")}
-            </h1>
-            <p className="text-muted-foreground mt-1.5 text-sm">
-              {t("home.subtitle")}
-            </p>
+            <h1 className="text-xl font-semibold tracking-tight">{t("home.title")}</h1>
+            <p className="text-muted-foreground mt-1.5 text-sm">{t("home.subtitle")}</p>
             <SellingPoints className="mt-4" />
           </div>
 
-          <DropZone
-            onFiles={addInputPaths}
-            onFolder={handleFolder}
-            formats={supportedFormats}
-          />
-
+          <DropZone onFiles={addInputPaths} onFolder={handleFolder} formats={supportedFormats} />
           <OutputModeSelector />
 
           <div className="flex flex-col gap-2">
-            <Label className="text-xs text-muted-foreground">
-              {t("home.outputLocation")}
-            </Label>
+            <Label className="text-xs text-muted-foreground">{t("home.outputLocation")}</Label>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -278,19 +217,11 @@ export function HomePage() {
                     placeholder={t("home.outputDirPlaceholder")}
                     className="flex-1 min-w-0 h-9"
                   />
-                  <Button
-                    variant="outline"
-                    onClick={handleBrowseOutputDir}
-                  >
+                  <Button variant="outline" onClick={handleBrowseOutputDir}>
                     <FolderOpen size={14} />
                     {t("home.browse")}
                   </Button>
-                  <Button
-                    variant="outline"
-                    onClick={handleOpenOutputDir}
-                    disabled={!outputDir}
-                    title={t("home.openHint")}
-                  >
+                  <Button variant="outline" onClick={handleOpenOutputDir} disabled={!outputDir} title={t("home.openHint")}>
                     <Folder size={14} />
                     {t("home.open")}
                   </Button>
@@ -300,41 +231,29 @@ export function HomePage() {
           </div>
 
           <div className="relative w-full max-w-52">
-            <Link
-              size={14}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
-            />
+            <Link size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <Input
               type="text"
-              placeholder={t("home.pasteUrl")}
+              placeholder={allowOnline ? t("home.pasteUrl") : t("home.pasteUrlDisabled")}
               value={urlInput}
               onChange={(e) => setUrlInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleUrlSubmit();
-              }}
-              disabled={downloading}
+              onKeyDown={(e) => { if (e.key === "Enter") handleUrlSubmit(); }}
+              disabled={downloading || !allowOnline}
               className="pl-8 text-xs"
             />
             {urlError && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="absolute -bottom-5 left-2.5 text-xs text-destructive truncate max-w-full cursor-help">
-                    {urlError}
-                  </span>
+                  <span className="absolute -bottom-5 left-2.5 text-xs text-destructive truncate max-w-full cursor-help">{urlError}</span>
                 </TooltipTrigger>
-                <TooltipContent
-                  side="top"
-                  className="max-w-xs p-2 text-xs"
-                >
+                <TooltipContent side="top" className="max-w-xs p-2 text-xs">
                   <p className="whitespace-pre-wrap break-words">{urlError}</p>
                 </TooltipContent>
               </Tooltip>
             )}
           </div>
           {urlInput && (
-            <p className="text-xs text-muted-foreground -mt-2">
-              {t("home.urlPrivacyNote")}
-            </p>
+            <p className="text-xs text-muted-foreground -mt-2">{t("home.urlPrivacyNote")}</p>
           )}
 
           <Card className="flex flex-col overflow-hidden">
@@ -342,39 +261,31 @@ export function HomePage() {
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm">
                   {t("home.sessionTitle")}{" "}
-                  <span className="text-muted-foreground tabular-nums">
-                    ({totalTasks})
-                  </span>
+                  <span className="text-muted-foreground tabular-nums">({totalTasks})</span>
                 </CardTitle>
-                {hasTerminal && !sessionConverting && (
-                  <span className="text-xs text-muted-foreground">
-                    {t("home.newSessionHint")}
-                  </span>
-                )}
               </div>
             </CardHeader>
 
             <CardContent className="flex-1 min-h-0 p-0">
               {totalTasks === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <Inbox
-                    className="mx-auto mb-3 text-muted-foreground opacity-30"
-                    size={32}
-                  />
-                  <p className="text-sm font-medium">
-                    {t("home.noFilesInSession")}
-                  </p>
+                  <Inbox className="mx-auto mb-3 text-muted-foreground opacity-30" size={32} />
+                  <p className="text-sm font-medium">{t("home.noFilesInSession")}</p>
                 </div>
               ) : (
-                <ScrollArea className="min-h-[80px] max-h-[360px] overflow-y-auto">
+                <ScrollArea className="min-h-[80px] max-h-[240px] overflow-y-auto">
                   <div className="space-y-2 p-4 pt-1">
-                    {sessionTasks.map((tsk) => (
-                      <TaskItem
-                        key={tsk.id}
-                        task={tsk}
-                        onRemove={removeFromSession}
-                      />
+                    {previewTasks.map((tsk) => (
+                      <TaskItem key={tsk.id} task={tsk as any} compact />
                     ))}
+                    {totalTasks > 5 && (
+                      <button
+                        onClick={() => setPanelOpen(true)}
+                        className="w-full text-center text-xs text-primary py-2 hover:underline"
+                      >
+                        {t("home.viewAll")} ({totalTasks - 5} more)
+                      </button>
+                    )}
                   </div>
                 </ScrollArea>
               )}
@@ -382,44 +293,28 @@ export function HomePage() {
 
             <CardFooter className="border-t border-border p-4 flex flex-col gap-3">
               <div className="flex items-center gap-2 w-full">
-                {sessionConverting ? (
+                {tasks.some((t) => t.status === "Processing") ? (
                   <Button variant="destructive" onClick={async () => {
                     if (await confirm('确定要取消所有进行中的转换吗？', { title: '取消转换', kind: 'warning' })) {
-
-                      cancelConversion();
+                      cancelAll();
                     }
-                  }} disabled={sessionCancelling}>
-                    {sessionCancelling ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <X size={16} />
-                    )}
+                  }} disabled={loading}>
+                    <X size={16} />
                     {t("home.cancel")}
                   </Button>
                 ) : (
-                    <Button
-                      onClick={handleStart}
-                      disabled={pendingCount === 0}
-                    >
+                  <Button onClick={start} disabled={pendingCount === 0}>
                     <Play size={16} />
                     {t("home.startConversion")}
                   </Button>
                 )}
-                {failedCount > 0 && !sessionConverting && (
-                  <Button
-                    variant="outline"
-                    onClick={retryFailed}
-                    className="text-destructive hover:text-destructive"
-                  >
+                {failedCount > 0 && !tasks.some((t) => t.status === "Processing") && (
+                  <Button variant="outline" onClick={retryFailed} className="text-destructive hover:text-destructive">
                     <RotateCcw size={16} />
                     {t("batch.retryFailed")}
                   </Button>
                 )}
-                <Button
-                  variant="outline"
-                  onClick={clearSession}
-                  disabled={totalTasks === 0 || sessionConverting}
-                >
+                <Button variant="outline" onClick={clearDone} disabled={totalTasks === 0 || tasks.some((t) => t.status === "Processing")}>
                   <Trash2 size={16} />
                   {t("home.clearSession")}
                 </Button>
@@ -428,66 +323,29 @@ export function HomePage() {
               <div className="flex items-center gap-2 flex-wrap">
                 <div className="flex items-center gap-1.5 rounded-md bg-background px-2 py-1 border border-border">
                   <Loader2 size={12} className="animate-spin text-primary" />
-                  <span className="text-xs font-medium tabular-nums">
-                    {processingCount}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {t("taskStatus.processing")}
-                  </span>
+                  <span className="text-xs font-medium tabular-nums">{processingCount}</span>
+                  <span className="text-[11px] text-muted-foreground">{t("taskStatus.processing")}</span>
                 </div>
                 <div className="flex items-center gap-1.5 rounded-md bg-background px-2 py-1 border border-border">
                   <CheckCircle2 size={12} className="text-success" />
-                  <span className="text-xs font-medium tabular-nums">
-                    {completedCount}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {t("taskStatus.completed")}
-                  </span>
+                  <span className="text-xs font-medium tabular-nums">{completedCount}</span>
+                  <span className="text-[11px] text-muted-foreground">{t("taskStatus.completed")}</span>
                 </div>
                 <div className="flex items-center gap-1.5 rounded-md bg-background px-2 py-1 border border-border">
-                  <XCircle size={12} className="text-destructive">
-                  </XCircle>
-                  <span className="text-xs font-medium tabular-nums">
-                    {failedCount}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {t("taskStatus.failed")}
-                  </span>
+                  <XCircle size={12} className="text-destructive" />
+                  <span className="text-xs font-medium tabular-nums">{failedCount}</span>
+                  <span className="text-[11px] text-muted-foreground">{t("taskStatus.failed")}</span>
                 </div>
                 <div className="flex items-center gap-1.5 rounded-md bg-background px-2 py-1 border border-border">
                   <AlertTriangle size={12} className="text-warning" />
-                  <span className="text-xs font-medium tabular-nums">
-                    {pendingCount}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {t("taskStatus.pending")}
-                  </span>
+                  <span className="text-xs font-medium tabular-nums">{pendingCount}</span>
+                  <span className="text-[11px] text-muted-foreground">{t("taskStatus.pending")}</span>
                 </div>
               </div>
-
-              {completedCount > 0 && !sessionConverting && (
-                <p
-                  className="text-xs text-muted-foreground text-center w-full"
-                  role="status"
-                >
-                  {t("home.conversionComplete").replace(
-                    "{count}",
-                    String(completedCount)
-                  )}{" "}
-                  鐠?{t("home.viewHistoryHint")}
-                </p>
-              )}
             </CardFooter>
           </Card>
         </div>
       </div>
-
-      {sessionConverting && (
-        <div className="px-6 py-2 bg-primary/5 border-t border-primary/20 flex items-center gap-2 shrink-0">
-          <Loader2 className="animate-spin text-primary" size={16} />
-          <span className="text-sm text-primary">{t("home.converting")}</span>
-        </div>
-      )}
     </div>
   );
 }
