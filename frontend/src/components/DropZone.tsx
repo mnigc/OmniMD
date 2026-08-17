@@ -6,6 +6,7 @@ import { pickFiles, pickDir } from "../api/dialogs";
 import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
+import { useModelStore } from "../store/useModelStore";
 
 interface DropZoneProps {
   onFiles: (paths: string[]) => void;
@@ -24,6 +25,8 @@ export function DropZone({
   const [isDragging, setIsDragging] = useState(false);
   const [isFolderDrag, setIsFolderDrag] = useState(false);
   const tauriDndReady = useRef(false);
+  const { engineMode, modelReady } = useModelStore();
+  const disabled = !modelReady && engineMode === "local";
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
@@ -33,7 +36,16 @@ export function DropZone({
         const appWindow = getCurrentWebviewWindow();
         unlisten = await appWindow.onDragDropEvent((event) => {
           const type = event.payload.type;
+          const isDisabled = () => {
+            const s = useModelStore.getState();
+            return !s.modelReady && s.engineMode === "local";
+          };
           if (type === "enter") {
+            if (isDisabled()) {
+              setIsDragging(false);
+              setIsFolderDrag(false);
+              return;
+            }
             const paths = (event.payload as { paths?: string[] }).paths ?? [];
             const single = paths.length === 1 ? paths[0] : undefined;
             setIsFolderDrag(
@@ -42,6 +54,7 @@ export function DropZone({
             );
             setIsDragging(true);
           } else if (type === "over") {
+            if (isDisabled()) return;
             setIsDragging(true);
           } else if (type === "leave") {
             setIsDragging(false);
@@ -49,6 +62,7 @@ export function DropZone({
           } else if (type === "drop") {
             setIsDragging(false);
             setIsFolderDrag(false);
+            if (isDisabled()) return;
             const paths = (event.payload as { paths?: string[] }).paths ?? [];
             if (paths.length) {
               onFiles(paths);
@@ -67,27 +81,34 @@ export function DropZone({
   }, [onFiles]);
 
   const openFilePicker = useCallback(async () => {
+    if (disabled) return;
     const paths = await pickFiles(formats);
     if (paths.length > 0) {
       onFiles(paths);
     }
-  }, [formats, onFiles]);
+  }, [formats, onFiles, disabled]);
 
   const openFolderPicker = useCallback(async () => {
-    if (!onFolder) return;
+    if (disabled || !onFolder) return;
     const dir = await pickDir();
     if (dir) onFolder(dir);
-  }, [onFolder]);
+  }, [onFolder, disabled]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
   }, []);
 
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const s = useModelStore.getState();
+      if (!s.modelReady && s.engineMode === "local") return;
+      setIsDragging(true);
+    },
+    []
+  );
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -102,6 +123,8 @@ export function DropZone({
       e.stopPropagation();
       setIsDragging(false);
       setIsFolderDrag(false);
+
+      if (disabled) return;
 
       if (tauriDndReady.current) return;
 
@@ -131,7 +154,7 @@ export function DropZone({
       }
       openFilePicker();
     },
-    [onFiles, onFolder, openFilePicker, openFolderPicker]
+    [onFiles, onFolder, openFilePicker, openFolderPicker, disabled]
   );
 
   return (
@@ -145,7 +168,9 @@ export function DropZone({
         className,
         isDragging
           ? "border-primary bg-primary/5 shadow-lg shadow-primary/10"
-          : "border-border bg-muted/30 hover:border-primary/50 hover:bg-muted/50"
+          : disabled
+            ? "border-border bg-muted/30 opacity-60 cursor-not-allowed"
+            : "border-border bg-muted/30 hover:border-primary/50 hover:bg-muted/50"
       )}
     >
       <div
@@ -173,7 +198,21 @@ export function DropZone({
             ? isFolderDrag
               ? t("dropzone.folderDetected")
               : t("dropzone.releaseToConvert")
-            : t("dropzone.dropFilesOrFolder")}
+            : disabled
+              ? t("dropzone.dropDisabled")
+              : t("dropzone.dropFilesOrFolder")}
+        </p>
+        <p
+          className={cn(
+            "text-[11px] mt-0.5",
+            disabled ? "text-destructive" : "text-muted-foreground/80"
+          )}
+        >
+          {disabled
+            ? t("dropzone.disabledHint")
+            : engineMode === "cloud"
+              ? t("dropzone.cloudLimits")
+              : t("dropzone.localLimits")}
         </p>
       </div>
 
@@ -181,6 +220,7 @@ export function DropZone({
         <Button
           size="sm"
           variant="outline"
+          disabled={disabled}
           onClick={(e) => {
             e.stopPropagation();
             openFilePicker();
@@ -193,6 +233,7 @@ export function DropZone({
           <Button
             size="sm"
             variant="outline"
+            disabled={disabled}
             onClick={(e) => {
               e.stopPropagation();
               openFolderPicker();

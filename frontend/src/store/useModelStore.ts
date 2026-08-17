@@ -10,7 +10,11 @@ import {
   getModelSource,
   importOfflineModel,
   checkModelUpdate,
+  getEngineMode,
+  setEngineMode,
+  isModelDownloaded,
 } from "../api/tauriApi";
+import type { EngineMode } from "../api/tauriApi";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -21,10 +25,15 @@ interface ModelStore {
   downloading: boolean;
   downloadProgress: Record<string, DownloadProgress>;
   loading: boolean;
+  engineMode: EngineMode;
+  modelReady: boolean;
 
   refreshModels: () => Promise<void>;
   refreshCacheInfo: () => Promise<void>;
   refreshModelSource: () => Promise<void>;
+  refreshEngineMode: () => Promise<void>;
+  setEngineModeAction: (mode: EngineMode) => Promise<void>;
+  refreshModelReady: () => Promise<void>;
   downloadModel: (modelName: string) => Promise<void>;
   cancelDownload: () => Promise<void>;
   clearCache: () => Promise<void>;
@@ -41,11 +50,14 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   downloading: false,
   downloadProgress: {},
   loading: false,
+  engineMode: "local",
+  modelReady: true,
 
   refreshModels: async () => {
     try {
       const models = await listModels();
       set({ models });
+      await get().refreshModelReady();
     } catch {
       // ignore
     }
@@ -64,6 +76,33 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     try {
       const source = await getModelSource();
       set({ modelSource: source });
+    } catch {
+      // ignore
+    }
+  },
+
+  refreshEngineMode: async () => {
+    try {
+      const mode = await getEngineMode();
+      set({ engineMode: mode });
+    } catch {
+      // ignore
+    }
+  },
+
+  setEngineModeAction: async (mode) => {
+    try {
+      await setEngineMode(mode);
+      set({ engineMode: mode });
+    } catch {
+      // ignore
+    }
+  },
+
+  refreshModelReady: async () => {
+    try {
+      const ready = await isModelDownloaded();
+      set({ modelReady: ready });
     } catch {
       // ignore
     }
@@ -149,6 +188,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           }));
           if (dp.progress >= 1.0) {
             get().refreshModels();
+            get().refreshModelReady();
             get().refreshCacheInfo();
           }
         }

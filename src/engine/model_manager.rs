@@ -6,35 +6,62 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
-const MODELS: &[(&str, &str, u64, &str)] = &[
-    ("pipeline", "基础模型 (Pipeline)", 1_800_000_000, "https://huggingface.co/opendatalab/PDF-Extract-Kit"),
-    ("vlm", "高质量模型 (VLM)", 3_200_000_000, "https://huggingface.co/opendatalab/PDF-Extract-Kit-VLM"),
+// ── Model metadata: (name, display_name, size_bytes, download_url,
+//                      min_ram_gb, rec_ram_gb, gpu_required, gpu_vram_gb,
+//                      cpu_only_supported, notes) ──
+const MODELS: &[(&str, &str, u64, &str, u64, u64, bool, u64, bool, &str)] = &[
+    (
+        "pipeline",
+        "基础模型 (Pipeline)",
+        1_800_000_000,
+        "https://huggingface.co/opendatalab/PDF-Extract-Kit",
+        16, 16, false, 4, true,
+        "仅 CPU 可运行，GPU 可加速",
+    ),
+    (
+        "vlm",
+        "高质量模型 (VLM)",
+        3_200_000_000,
+        "https://huggingface.co/opendatalab/PDF-Extract-Kit-VLM",
+        16, 32, true, 8, false,
+        "需要 Volta 及以上架构显卡",
+    ),
 ];
 
+/// Resolve the application install directory.
+///
+/// In a normal Tauri bundle (nsis/msi/portable), `current_exe` points at the
+/// `.exe` inside the install folder, so its parent is the install root.
+fn install_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 fn model_cache_dir() -> PathBuf {
-    let base = if cfg!(target_os = "windows") {
-        std::env::var("USERPROFILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
-    } else {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
-    };
-    base.join(".cache").join("mineru").join("models")
+    install_dir().join("models")
 }
 
 fn mineru_config_path() -> PathBuf {
-    let base = if cfg!(target_os = "windows") {
-        std::env::var("USERPROFILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
-    } else {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
-    };
-    base.join(".mineru").join("mineru.json")
+    install_dir().join("config").join("mineru.json")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HardwareRequirements {
+    /// Minimum RAM in GiB.
+    pub min_ram_gb: u64,
+    /// Recommended RAM in GiB.
+    pub rec_ram_gb: u64,
+    /// Whether a dedicated GPU is strictly required.
+    pub gpu_required: bool,
+    /// GPU VRAM in GiB (0 if not applicable).
+    pub gpu_vram_gb: u64,
+    /// Whether the model can run on CPU only (without a GPU).
+    pub cpu_only_supported: bool,
+    /// Human-readable extra note (e.g. "Volta architecture required").
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +74,7 @@ pub struct ModelInfoDto {
     pub path: Option<String>,
     pub download_url: Option<String>,
     pub version: Option<String>,
+    pub hardware_requirements: HardwareRequirements,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,8 +110,11 @@ impl ModelManager {
         let cache_dir = model_cache_dir();
         let mut models = Vec::new();
 
-        for (name, display_name, size_bytes, _url) in MODELS {
-            let model_dir = cache_dir.join(name);
+        for tuple in MODELS {
+            let (name, display_name, size_bytes, _url, min_ram, rec_ram,
+                 gpu_required, gpu_vram, cpu_only, notes) = tuple;
+
+            let model_dir = cache_dir.join(*name);
             let status = if model_dir.exists() {
                 let has_files = std::fs::read_dir(&model_dir)
                     .map(|entries| entries.flatten().count() > 0)
@@ -107,6 +138,14 @@ impl ModelManager {
                 path,
                 download_url: None,
                 version: None,
+                hardware_requirements: HardwareRequirements {
+                    min_ram_gb: *min_ram,
+                    rec_ram_gb: *rec_ram,
+                    gpu_required: *gpu_required,
+                    gpu_vram_gb: *gpu_vram,
+                    cpu_only_supported: *cpu_only,
+                    notes: notes.to_string(),
+                },
             });
         }
 
@@ -252,6 +291,48 @@ impl ModelManager {
         Ok(parsed["model_source"]
             .as_str()
             .unwrap_or("auto")
+            .to_string())
+    }
+
+    /// Persist the active engine mode (`local` or `cloud`) alongside
+    /// `model_source` in the shared `config/mineru.json`.
+    pub async fn set_engine_mode(&self, mode: String) -> Result<(), String> {
+        let config_path = mineru_config_path();
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
+        }
+
+        let config = if config_path.exists() {
+            std::fs::read_to_string(&config_path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let mut parsed: serde_json::Value =
+            serde_json::from_str(&config).unwrap_or(serde_json::json!({}));
+        parsed["engine_mode"] = serde_json::json!(mode);
+
+        let content = serde_json::to_string_pretty(&parsed)
+            .map_err(|e| format!("序列化配置失败: {}", e))?;
+        std::fs::write(&config_path, &content)
+            .map_err(|e| format!("写入配置失败: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Read the persisted engine mode; defaults to `local` when absent.
+    pub fn get_engine_mode(&self) -> Result<String, String> {
+        let config_path = mineru_config_path();
+        if !config_path.exists() {
+            return Ok("local".to_string());
+        }
+        let content = std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("读取配置失败: {}", e))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| format!("解析配置失败: {}", e))?;
+        Ok(parsed["engine_mode"]
+            .as_str()
+            .unwrap_or("local")
             .to_string())
     }
 

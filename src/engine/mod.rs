@@ -1,10 +1,41 @@
 pub mod mineru_engine;
 pub mod mineru_runtime;
+pub mod cloud_engine;
 pub mod batch_queue;
 pub mod model_manager;
 
 use crate::models::ocr::{Cancellation, ProgressCallback};
 use crate::models::task::{ConversionError, ConversionResult, ConversionTask};
+
+/// Which engine the app uses for conversion: the bundled local MinerU
+/// subprocess, or the MinerU Agent cloud API as a temporary fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineMode {
+    Local,
+    Cloud,
+}
+
+impl Default for EngineMode {
+    fn default() -> Self {
+        EngineMode::Local
+    }
+}
+
+impl EngineMode {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "cloud" => EngineMode::Cloud,
+            _ => EngineMode::Local,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EngineMode::Local => "local",
+            EngineMode::Cloud => "cloud",
+        }
+    }
+}
 
 /// Abstract document-to-markdown engine. OmniMD consumes documents through this
 /// trait; MinerU is currently the only implementation (D4 decision: MinerU is

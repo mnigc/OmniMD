@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tokio::sync::Mutex;
 
-use crate::engine::mineru_engine::MinerUEngine;
 use crate::engine::DocumentEngine;
 use crate::models::ocr::{Cancellation, ProgressCallback};
 use crate::models::task::{BatchSummaryDto, ConversionStage, ConversionTask, OutputMode, ParseQuality, TaskStatus};
@@ -71,7 +70,6 @@ fn has_active_tasks(app: &tauri::AppHandle) -> bool {
 }
 
 pub struct BatchQueue {
-    engine: tokio::sync::Mutex<Option<Arc<MinerUEngine>>>,
     running: Arc<AtomicBool>,
     concurrency: Arc<AtomicU32>,
     active_tasks: Arc<Mutex<HashMap<String, Arc<Cancellation>>>>,
@@ -81,16 +79,11 @@ pub struct BatchQueue {
 impl BatchQueue {
     pub fn new(concurrency: u32) -> Self {
         BatchQueue {
-            engine: tokio::sync::Mutex::new(None),
             running: Arc::new(AtomicBool::new(false)),
             concurrency: Arc::new(AtomicU32::new(concurrency)),
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
             worker_handle: Arc::new(Mutex::new(None)),
         }
-    }
-
-    pub async fn set_engine(&self, engine: Arc<MinerUEngine>) {
-        *self.engine.lock().await = Some(engine);
     }
 
     pub fn set_concurrency(&self, n: u32) {
@@ -115,14 +108,12 @@ impl BatchQueue {
         Ok(id)
     }
 
-    pub async fn start(&self, app: tauri::AppHandle) {
+    pub async fn start(&self, app: tauri::AppHandle, engine: Arc<dyn DocumentEngine>) {
         if self.running.swap(true, Ordering::Relaxed) {
             return;
         }
 
-        let guard = self.engine.lock().await;
-        let engine = guard.as_ref().expect("BatchQueue engine not set").clone();
-        drop(guard);
+        let engine = engine.clone();
 
         let active_tasks = self.active_tasks.clone();
         let running = self.running.clone();
@@ -250,13 +241,18 @@ impl BatchQueue {
         Ok(())
     }
 
-    pub async fn resume_task(&self, app: &tauri::AppHandle, task_id: &str) -> Result<(), String> {
+    pub async fn resume_task(
+        &self,
+        app: &tauri::AppHandle,
+        engine: Arc<dyn DocumentEngine>,
+        task_id: &str,
+    ) -> Result<(), String> {
         update_status(app, task_id, "Pending", None, 0);
         let _ = app.emit("batch-status", BatchStatusEvent {
             task_id: task_id.to_string(), status: "Pending".to_string(), error: None, elapsed_secs: 0,
         });
         if !self.is_running() {
-            self.start(app.clone()).await;
+            self.start(app.clone(), engine).await;
         }
         Ok(())
     }
@@ -304,7 +300,7 @@ impl BatchQueue {
         Ok(())
     }
 
-    pub async fn retry_failed(&self, app: &tauri::AppHandle) -> Result<(), String> {
+    pub async fn retry_failed(&self, app: &tauri::AppHandle, engine: Arc<dyn DocumentEngine>) -> Result<(), String> {
         let mut any = false;
         if let Ok(db) = crate::db::db(app) {
             for t in db.list_batch_tasks("Failed", 100, 0).unwrap_or_default() {
@@ -313,7 +309,7 @@ impl BatchQueue {
             }
         }
         if any && !self.is_running() {
-            self.start(app.clone()).await;
+            self.start(app.clone(), engine).await;
         }
         emit_summary(app);
         Ok(())

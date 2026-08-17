@@ -288,3 +288,19 @@ export async function importOfflineModel(path: string): Promise<void> {
 export async function checkModelUpdate(modelName: string): Promise<boolean> {
   return invoke<boolean>("check_model_update", { modelName });
 }
+
+// ---- Engine mode API ----
+
+export type EngineMode = "local" | "cloud";
+
+export async function getEngineMode(): Promise<EngineMode> {
+  return invoke<EngineMode>("get_engine_mode");
+}
+
+export async function setEngineMode(mode: EngineMode): Promise<void> {
+  return invoke<void>("set_engine_mode", { mode });
+}
+
+export async function isModelDownloaded(): Promise<boolean> {
+  return invoke<boolean>("is_model_downloaded");
+}

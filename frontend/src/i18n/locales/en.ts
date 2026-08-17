@@ -124,6 +124,12 @@
     selected: "selected",
     files: "files",
     folderDetected: "Folder detected",
+    cloudLimits: "Cloud limits: ≤10MB per file · ≤20 pages · PDF/Images/Docx/PPTx/Xlsx · Markdown only",
+    localLimits: "Local limits: ≤200MB per file · ≤200 pages · PDF/Images/Word/PPT/Excel",
+    disabledHint:
+      "Base model not downloaded — local parsing unavailable. Download it or enable cloud parsing temporarily.",
+    cloudSkipToast:
+      "Cloud parsing skipped {n} unsupported file(s): {files}. Cloud only supports PDF/Images/Docx/PPTx/Xlsx",
   },
   taskStatus: {
     pending: "Pending",
@@ -258,6 +264,14 @@
     searchEmpty: "No matching documents",
     noPreview: "Select a document from the left to preview",
   },
+  banner: {
+    text: "Base model not downloaded — local parsing unavailable",
+    download: "Download Offline Model (1.8GB)",
+    useCloud: "Use Cloud",
+    downloading: "Downloading offline model…",
+    cancel: "Cancel Download",
+    cloudMode: "Cloud parsing",
+  },
   model: {
     title: "Model Management",
     pipeline: "Base Model (Pipeline)",
@@ -283,5 +297,14 @@
     bytes: "bytes",
     gb: "GB",
     mb: "MB",
+    hardwareRequirements: "Hardware Requirements",
+    minRam: "Min RAM",
+    recRam: "Rec RAM",
+    gpuRequired: "GPU Required",
+    gpuOptional: "GPU Optional",
+    cpuSupported: "CPU-only supported",
+    cpuNotSupported: "Dedicated GPU required",
+    cloudToggle: "Cloud parsing",
+    cloudToggleHint: "≤10MB, ≤20 pages, no model download needed, requires network",
   },
 } as const;

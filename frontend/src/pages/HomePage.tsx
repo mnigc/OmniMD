@@ -27,6 +27,8 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { useBatchStore } from "../store/useBatchStore";
 import type { ConversionTask } from "../types";
 import { useSettingsStore } from "../store/useSettingsStore";
+import { useModelStore } from "../store/useModelStore";
+import { showToast } from "../lib/toast";
 import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
 import { Button } from "../components/ui/button";
@@ -46,10 +48,16 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip";
 
+const CLOUD_EXTENSIONS = [
+  "pdf", "docx", "pptx", "xlsx",
+  "png", "jpg", "jpeg", "jp2", "webp", "gif", "bmp",
+];
+
 export function HomePage() {
   const { t } = useI18n();
   const { tasks, summary, start, loading, cancelAll, retryFailed, clearDone, enqueue, setPanelOpen } = useBatchStore();
   const { outputMode, defaultOutputDir, allowOnline } = useSettingsStore();
+  const { engineMode } = useModelStore();
 
   const [outputDir, setOutputDir] = useState(defaultOutputDir);
   const [outputLocationMode, setOutputLocationMode] = useState<"sourceDir" | "custom">("sourceDir");
@@ -88,7 +96,37 @@ export function HomePage() {
   const handleFiles = useCallback(
     async (paths: string[]) => {
       if (paths.length === 0) return;
-      for (const path of paths) {
+      let files = paths;
+
+      if (engineMode === "cloud") {
+        const skipped: string[] = [];
+        const kept: string[] = [];
+        for (const path of paths) {
+          const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+          const dot = path.lastIndexOf(".");
+          const ext = dot > slash ? path.slice(dot + 1).toLowerCase() : "";
+          if (ext && !CLOUD_EXTENSIONS.includes(ext)) {
+            skipped.push(path);
+          } else {
+            kept.push(path);
+          }
+        }
+        files = kept;
+        if (skipped.length > 0) {
+          const names = skipped
+            .map((s) => s.split(/[\\/]/).pop() || s)
+            .join(", ");
+          showToast(
+            t("dropzone.cloudSkipToast")
+              .replace("{n}", String(skipped.length))
+              .replace("{files}", names),
+            4000
+          );
+        }
+      }
+
+      if (files.length === 0) return;
+      for (const path of files) {
         const dir = inferOutputDir(path);
         const fileName = path.split(/[\\/]/).pop() || "output";
         const outputName = fileName.replace(/\.[^.]+$/, ".md");
@@ -96,7 +134,7 @@ export function HomePage() {
         await enqueue(path, outputPath, outputMode);
       }
     },
-    [inferOutputDir, outputMode, enqueue]
+    [inferOutputDir, outputMode, enqueue, engineMode, t]
   );
 
   const addInputPaths = useCallback(async (paths: string[]) => {

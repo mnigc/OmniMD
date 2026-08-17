@@ -15,10 +15,11 @@ use db::{
     db as db_handle, DocumentDto, FolderDto, ScanResultDto, SearchHitDto, WorkspaceDto,
 };
 use engine::batch_queue::BatchQueue;
+use engine::cloud_engine::CloudEngine;
 use engine::mineru_engine::MinerUEngine;
 use engine::mineru_runtime::MinerURuntime;
 use engine::model_manager::ModelManager;
-use engine::DocumentEngine;
+use engine::{DocumentEngine, EngineMode};
 use models::ocr::{Cancellation, ProgressCallback};
 use models::task::{
     AiReadyOpts, BatchSummaryDto, BatchTaskDto, ConversionError, ConversionResult, ConversionTask,
@@ -103,20 +104,29 @@ struct AppState {
     tasks: Mutex<HashMap<String, ConversionTask>>,
     cancellations: Mutex<HashMap<String, Cancellation>>,
     runtime: Mutex<Option<Arc<MinerURuntime>>>,
-    queue_engine: Mutex<Option<Arc<MinerUEngine>>>,
+    queue_engine: Mutex<Option<Arc<dyn DocumentEngine>>>,
     batch_queue: BatchQueue,
     model_manager: ModelManager,
+    engine_mode: Mutex<EngineMode>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let model_manager = ModelManager::new();
+        // Read the persisted engine mode so the toggle survives restarts.
+        let engine_mode = EngineMode::from_str(
+            &model_manager
+                .get_engine_mode()
+                .unwrap_or_else(|_| "local".to_string()),
+        );
         AppState {
             tasks: Mutex::new(HashMap::new()),
             cancellations: Mutex::new(HashMap::new()),
             runtime: Mutex::new(None),
             queue_engine: Mutex::new(None),
             batch_queue: BatchQueue::new(3),
-            model_manager: ModelManager::new(),
+            model_manager,
+            engine_mode: Mutex::new(engine_mode),
         }
     }
 }
@@ -133,13 +143,24 @@ impl AppState {
         runtime
     }
 
-    /// Lazily create the MinerU engine for batch queue.
-    fn queue_engine(&self) -> Arc<MinerUEngine> {
+    /// Create an engine matching the current `engine_mode`. Local engines
+    /// share the lazily created MinerU runtime; the cloud engine is a pure
+    /// HTTP client to `mineru.net`.
+    fn create_engine(&self) -> Arc<dyn DocumentEngine> {
+        match *self.engine_mode.lock().unwrap() {
+            EngineMode::Cloud => Arc::new(CloudEngine::new()),
+            EngineMode::Local => Arc::new(MinerUEngine::new(self.mineru_runtime())),
+        }
+    }
+
+    /// Lazily create and cache the engine for the batch queue. The cache is
+    /// invalidated whenever `engine_mode` changes.
+    fn queue_engine(&self) -> Arc<dyn DocumentEngine> {
         let mut guard = self.queue_engine.lock().unwrap();
         if let Some(e) = guard.as_ref() {
             return e.clone();
         }
-        let engine = Arc::new(MinerUEngine::new(self.mineru_runtime()));
+        let engine = self.create_engine();
         *guard = Some(engine.clone());
         engine
     }
@@ -269,7 +290,7 @@ async fn convert_file(
         );
     });
 
-    let engine: Arc<dyn DocumentEngine> = Arc::new(MinerUEngine::new(state.mineru_runtime()));
+    let engine: Arc<dyn DocumentEngine> = state.create_engine();
     let result = match engine
         .convert(&task, Some(progress_cb), Some(&cancellation))
         .await
@@ -736,15 +757,9 @@ async fn batch_enqueue(
 
 #[tauri::command]
 async fn batch_start(app: tauri::AppHandle) -> Result<(), String> {
-    let engine = {
-        let state = get_state(&app)?;
-        state.queue_engine()
-    };
-    {
-        let state = get_state(&app)?;
-        state.batch_queue.set_engine(engine).await;
-        state.batch_queue.start(app.clone()).await;
-    }
+    let state = get_state(&app)?;
+    let engine = state.queue_engine();
+    state.batch_queue.start(app.clone(), engine).await;
     Ok(())
 }
 
@@ -757,7 +772,8 @@ async fn batch_pause_task(app: tauri::AppHandle, task_id: String) -> Result<(), 
 #[tauri::command]
 async fn batch_resume_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
     let state = get_state(&app)?;
-    state.batch_queue.resume_task(&app, &task_id).await
+    let engine = state.queue_engine();
+    state.batch_queue.resume_task(&app, engine, &task_id).await
 }
 
 #[tauri::command]
@@ -775,7 +791,8 @@ async fn batch_cancel_all(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn batch_retry_failed(app: tauri::AppHandle) -> Result<(), String> {
     let state = get_state(&app)?;
-    state.batch_queue.retry_failed(&app).await
+    let engine = state.queue_engine();
+    state.batch_queue.retry_failed(&app, engine).await
 }
 
 #[tauri::command]
@@ -801,6 +818,46 @@ fn batch_list_tasks(app: tauri::AppHandle) -> Result<Vec<BatchTaskDto>, String> 
 fn batch_get_summary(app: tauri::AppHandle) -> Result<BatchSummaryDto, String> {
     use db::db as db_handle;
     db_handle(&app)?.get_batch_summary()
+}
+
+// ---------------------------------------------------------------------------
+// Engine mode commands
+// ---------------------------------------------------------------------------
+
+/// Switch between the local MinerU engine and the cloud fallback. Persists the
+/// mode to `config/mineru.json`, updates `AppState.engine_mode`, and invalidates
+/// the cached batch engine so the next conversion uses the new mode.
+#[tauri::command]
+async fn set_engine_mode(app: tauri::AppHandle, mode: String) -> Result<(), String> {
+    let state = get_state(&app)?;
+    let mode = EngineMode::from_str(&mode);
+    state
+        .model_manager
+        .set_engine_mode(mode.as_str().to_string())
+        .await?;
+    *state.engine_mode.lock().unwrap() = mode;
+    *state.queue_engine.lock().unwrap() = None;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_engine_mode(app: tauri::AppHandle) -> Result<String, String> {
+    let state = get_state(&app)?;
+    let mode = state.model_manager.get_engine_mode()?;
+    *state.engine_mode.lock().unwrap() = EngineMode::from_str(&mode);
+    Ok(mode)
+}
+
+/// Whether the local pipeline model has been downloaded (non-empty
+/// `models/pipeline` directory). Used to decide when to show the first-launch
+/// download banner.
+#[tauri::command]
+async fn is_model_downloaded(app: tauri::AppHandle) -> Result<bool, String> {
+    let state = get_state(&app)?;
+    let models = state.model_manager.list_models().await?;
+    Ok(models
+        .iter()
+        .any(|m| m.name == "pipeline" && m.status == "downloaded"))
 }
 
 // ---------------------------------------------------------------------------
@@ -935,6 +992,9 @@ pub fn run() {
             batch_set_concurrency,
             batch_list_tasks,
             batch_get_summary,
+            set_engine_mode,
+            get_engine_mode,
+            is_model_downloaded,
             list_models,
             get_model_status,
             download_model,

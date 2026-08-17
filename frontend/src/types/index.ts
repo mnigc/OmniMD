@@ -177,6 +177,15 @@ export interface BatchSummaryEvent {
 
 // ---- Model management types ----
 
+export interface HardwareRequirements {
+  minRamGb: number;
+  recRamGb: number;
+  gpuRequired: boolean;
+  gpuVramGb: number;
+  cpuOnlySupported: boolean;
+  notes: string;
+}
+
 export interface ModelInfo {
   name: string;
   displayName: string;
@@ -185,6 +194,7 @@ export interface ModelInfo {
   path: string | null;
   downloadUrl: string | null;
   version: string | null;
+  hardwareRequirements: HardwareRequirements;
 }
 
 export interface CacheInfo {

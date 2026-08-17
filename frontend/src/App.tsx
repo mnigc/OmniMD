@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import {
+  Cloud,
   Eye,
   Clock,
   Home,
@@ -22,13 +23,23 @@ import { SidebarNavItem } from "./components/SidebarNavItem";
 import { WindowControls } from "./components/WindowControls";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
-import { getAppVersion, getDefaultOutputDir, getActiveWorkspace, writeTextFile, scanWorkspace } from "./api/tauriApi";
+import {
+  getAppVersion,
+  getDefaultOutputDir,
+  getActiveWorkspace,
+  writeTextFile,
+  scanWorkspace,
+  startMineru,
+} from "./api/tauriApi";
 import { ToastPortal, showToast } from "./lib/toast";
 import { useTaskStore } from "./store/useTaskStore";
 import { useBatchStore } from "./store/useBatchStore";
+import { useModelStore } from "./store/useModelStore";
 import { BatchTaskPanel } from "./components/BatchTaskPanel";
+import { ModelBanner } from "./components/ModelBanner";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
+import type { ModelInfo } from "./types";
 
 type Page = "home" | "library" | "convert" | "history" | "settings";
 
@@ -38,6 +49,7 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [appVersion, setAppVersion] = useState("v0.1.0");
   const [batchPanelOpen, setBatchPanelOpen] = useState(false);
+  const { engineMode, modelReady, downloading, downloadProgress } = useModelStore();
 
   useEffect(() => {
     getAppVersion().then(setAppVersion).catch(() => {});
@@ -86,6 +98,62 @@ export function App() {
       }
     });
     return cleanup;
+  }, []);
+
+  // First-launch check: whether the local pipeline model exists and which
+  // engine mode is persisted. Also registers the model download progress
+  // listener shared with the Settings page.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    (async () => {
+      try {
+        const store = useModelStore.getState();
+        await store.refreshModelReady();
+        await store.refreshEngineMode();
+        unlisten = await store.listenForProgress();
+      } catch {
+        // Not running in Tauri
+      }
+    })();
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  // React to pipeline model downloads that happen elsewhere (e.g. the
+  // Settings page): mark the model ready and, if cloud mode was chosen only
+  // because no local model existed, switch back to the local engine.
+  useEffect(() => {
+    const checkModelReady = (models: ModelInfo[]) => {
+      const pipelineReady = models.some(
+        (m) => m.name === "pipeline" && m.status === "downloaded"
+      );
+      if (!pipelineReady) return;
+      useModelStore.getState().refreshModelReady();
+      const state = useModelStore.getState();
+      if (state.engineMode === "cloud") {
+        state.setEngineModeAction("local");
+      }
+    };
+    checkModelReady(useModelStore.getState().models);
+    const unsub = useModelStore.subscribe((state) => checkModelReady(state.models));
+    return unsub;
+  }, []);
+
+  const handleDownloadModel = useCallback(async () => {
+    const store = useModelStore.getState();
+    await store.downloadModel("pipeline");
+    await store.setEngineModeAction("local");
+    try {
+      await startMineru();
+    } catch {
+      // best-effort: MinerUEngine auto-starts the runtime on first convert
+    }
+    await store.refreshModelReady();
+  }, []);
+
+  const handleUseCloud = useCallback(async () => {
+    await useModelStore.getState().setEngineModeAction("cloud");
   }, []);
 
   const handleNewMarkdown = useCallback(async () => {
@@ -149,6 +217,15 @@ export function App() {
           </span>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {engineMode === "cloud" && (
+            <span
+              className="flex items-center gap-1.5 text-xs text-muted-foreground px-2 py-1 rounded-md border border-sky-300/40 bg-sky-500/10"
+              title={t("banner.cloudMode")}
+            >
+              <Cloud size={13} className="text-sky-500" />
+              {t("banner.cloudMode")}
+            </span>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -164,6 +241,18 @@ export function App() {
         </div>
         <WindowControls />
       </header>
+
+      {!modelReady && engineMode !== "cloud" && (
+        <ModelBanner
+          downloading={downloading}
+          progress={downloadProgress.pipeline?.progress ?? 0}
+          onDownload={handleDownloadModel}
+          onUseCloud={handleUseCloud}
+          onCancelDownload={() => {
+            useModelStore.getState().cancelDownload();
+          }}
+        />
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         <aside

@@ -1,4 +1,4 @@
-import { Cpu, Download, RotateCcw, Loader2 } from "lucide-react";
+import { AlertTriangle, Cpu, Download, Monitor, RotateCcw, Loader2, MemoryStick } from "lucide-react";
 import type { ModelInfo, DownloadProgress } from "../types";
 import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
@@ -13,7 +13,7 @@ interface ModelCardProps {
 
 export function ModelCard({ model }: ModelCardProps) {
   const { t } = useI18n();
-  const { downloadModel, cancelDownload, downloading, downloadProgress } = useModelStore();
+  const { downloadModel, cancelDownload, downloading, downloadProgress, engineMode, setEngineModeAction } = useModelStore();
 
   const statusLabel = model.status === "downloaded"
     ? t("model.downloaded")
@@ -100,6 +100,93 @@ export function ModelCard({ model }: ModelCardProps) {
               <span className="text-[10px] text-muted-foreground">{progress.speed}</span>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── Hardware Requirements ── */}
+      {(() => {
+        const hw = model.hardwareRequirements;
+        const hasGpu = hw.gpuRequired && hw.gpuVramGb > 0;
+        const cpuFriendly = hw.cpuOnlySupported && !hw.gpuRequired;
+
+        return (
+          <div className="mt-3 pt-3 border-t border-border/50">
+            <div className="flex items-center gap-1.5 mb-2">
+              <AlertTriangle size={12} className={
+                hasGpu ? "text-destructive"
+                  : cpuFriendly ? "text-muted-foreground"
+                    : "text-amber-500"
+              } />
+              <span className="text-xs font-medium text-muted-foreground">
+                {t("model.hardwareRequirements")}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <MemoryStick size={11} className="text-muted-foreground shrink-0" />
+                <span className="text-[11px] text-muted-foreground">
+                  {t("model.minRam")}{" "}
+                  <span className="text-foreground font-medium">{hw.minRamGb} GB</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <MemoryStick size={11} className="text-emerald-500 shrink-0" />
+                <span className="text-[11px] text-muted-foreground">
+                  {t("model.recRam")}{" "}
+                  <span className="text-foreground font-medium">{hw.recRamGb} GB</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Monitor size={11} className={
+                  hasGpu ? "text-destructive" : "text-muted-foreground"
+                } />
+                <span className="text-[11px] text-muted-foreground">
+                  {hasGpu ? t("model.gpuRequired") : t("model.gpuOptional")}
+                  {hasGpu && (
+                    <span className="text-foreground font-medium ml-1">
+                      {hw.gpuVramGb} GB
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Cpu size={11} className={
+                  cpuFriendly ? "text-emerald-500" : "text-destructive"
+                } />
+                <span className="text-[11px] text-muted-foreground">
+                  {hw.cpuOnlySupported ? t("model.cpuSupported") : t("model.cpuNotSupported")}
+                </span>
+              </div>
+            </div>
+
+            {hw.notes && (
+              <div className="mt-2 flex items-start gap-1.5">
+                <span className="text-[11px] text-amber-500 shrink-0">ℹ</span>
+                <span className="text-[11px] text-muted-foreground">{hw.notes}</span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── Cloud fallback toggle (pipeline only) ── */}
+      {model.name === "pipeline" && (
+        <div className="mt-3 pt-3 border-t border-border/50 flex items-center justify-between gap-4">
+          <div className="flex flex-col min-w-0">
+            <span className="text-xs font-medium">{t("model.cloudToggle")}</span>
+            <span className="text-[11px] text-muted-foreground/70 mt-0.5">
+              {t("model.cloudToggleHint")}
+            </span>
+          </div>
+          <input
+            type="checkbox"
+            checked={engineMode === "cloud"}
+            onChange={(e) =>
+              setEngineModeAction(e.target.checked ? "cloud" : "local")
+            }
+            className="h-4 w-4 shrink-0"
+          />
         </div>
       )}
     </div>
