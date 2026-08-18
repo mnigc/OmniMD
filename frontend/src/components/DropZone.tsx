@@ -25,11 +25,19 @@ export function DropZone({
   const [isDragging, setIsDragging] = useState(false);
   const [isFolderDrag, setIsFolderDrag] = useState(false);
   const tauriDndReady = useRef(false);
+  // Keep the latest `onFiles` in a ref so the native drag-drop listener can be
+  // attached exactly once for the component's lifetime. Attaching inside an
+  // effect keyed on `onFiles` leaks listeners (the async `unlisten` is still
+  // undefined when the cleanup runs), which caused a single drop to enqueue the
+  // same file multiple times.
+  const onFilesRef = useRef(onFiles);
+  onFilesRef.current = onFiles;
   const { engineMode, modelReady } = useModelStore();
   const disabled = !modelReady && engineMode === "local";
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let cleanedUp = false;
     tauriDndReady.current = false;
     (async () => {
       try {
@@ -65,20 +73,25 @@ export function DropZone({
             if (isDisabled()) return;
             const paths = (event.payload as { paths?: string[] }).paths ?? [];
             if (paths.length) {
-              onFiles(paths);
+              onFilesRef.current(paths);
             }
           }
         });
         tauriDndReady.current = true;
+        // The effect may have been cleaned up while we awaited the listener.
+        if (cleanedUp) {
+          unlisten();
+        }
       } catch {
         /* non-Tauri, fall back to DOM drag/drop */
       }
     })();
     return () => {
+      cleanedUp = true;
       unlisten?.();
       tauriDndReady.current = false;
     };
-  }, [onFiles]);
+  }, []);
 
   const openFilePicker = useCallback(async () => {
     if (disabled) return;

@@ -114,6 +114,7 @@
     failed: "Failed",
     pending: "Pending",
     total: "Total",
+    moreHidden: "{n} more tasks hidden — clear the queue first",
   },
   dropzone: {
     dropDisabled: "Drop disabled",

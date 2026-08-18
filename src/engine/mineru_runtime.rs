@@ -79,15 +79,16 @@ impl MinerURuntime {
                 )
             })?;
 
+        // Spawn blocking tasks that read stdout and stderr concurrently. If they
+        // were read sequentially, the second stream would be discarded while the
+        // first one (the process) is still producing output, so we read both in
+        // parallel on separate blocking threads.
         let stdout = child.stdout.take().expect("child stdout should be piped");
-        let stderr = child.stderr.take().expect("child stderr should be piped");
-
-        // Spawn a background task that reads both stdout and stderr on a
-        // blocking thread (the underlying handle is std::io, not async) and
-        // forwards each non-empty line to the `tracing` logger. Errors and
-        // EOF end the task; the process is gone or broken at that point.
-        let _ = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             MinerURuntime::read_stdio(stdout, "mineru-api stdout");
+        });
+        let stderr = child.stderr.take().expect("child stderr should be piped");
+        tokio::task::spawn_blocking(move || {
             MinerURuntime::read_stdio(stderr, "mineru-api stderr");
         });
 

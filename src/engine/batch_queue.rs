@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -62,17 +62,11 @@ fn get_pending(app: &tauri::AppHandle, limit: u64) -> Vec<crate::models::task::B
     }
 }
 
-fn has_active_tasks(app: &tauri::AppHandle) -> bool {
-    match crate::db::db(app) {
-        Ok(db) => db.get_batch_summary().ok().map(|s| s.pending + s.processing + s.paused > 0).unwrap_or(false),
-        Err(_) => false,
-    }
-}
-
 pub struct BatchQueue {
     running: Arc<AtomicBool>,
     concurrency: Arc<AtomicU32>,
     active_tasks: Arc<Mutex<HashMap<String, Arc<Cancellation>>>>,
+    paused_tasks: Arc<Mutex<HashSet<String>>>,
     worker_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
@@ -82,6 +76,7 @@ impl BatchQueue {
             running: Arc::new(AtomicBool::new(false)),
             concurrency: Arc::new(AtomicU32::new(concurrency)),
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
+            paused_tasks: Arc::new(Mutex::new(HashSet::new())),
             worker_handle: Arc::new(Mutex::new(None)),
         }
     }
@@ -99,6 +94,16 @@ impl BatchQueue {
     }
 
     pub async fn enqueue(&self, app: tauri::AppHandle, source_path: String, output_path: String, output_mode: OutputMode, parse_quality: ParseQuality) -> Result<String, String> {
+        // Deduplicate: if an active task for the same source already exists,
+        // reuse it instead of creating another identical one. This prevents a
+        // single dropped file from producing a pile of duplicate tasks.
+        if let Ok(db) = crate::db::db(&app) {
+            if let Ok(Some(existing_id)) = db.find_active_batch_task_by_source(&source_path) {
+                emit_summary(&app);
+                return Ok(existing_id);
+            }
+        }
+
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
         let id = uuid::Uuid::new_v4().to_string();
 
@@ -113,112 +118,152 @@ impl BatchQueue {
             return;
         }
 
-        let engine = engine.clone();
+        // Acquire the tokio runtime handle on the caller's runtime thread so the
+        // OS worker thread can drive async work through `block_on`.
+        let rt = tokio::runtime::Handle::current();
 
+        let engine = engine.clone();
         let active_tasks = self.active_tasks.clone();
         let running = self.running.clone();
-        let _concurrency = self.concurrency.clone();
+        let concurrency = self.concurrency.clone();
+        let paused_tasks = self.paused_tasks.clone();
 
         let worker = move || {
-            let rt = tokio::runtime::Handle::current();
-            loop {
-                if !running.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                let pending = get_pending(&app, 10);
-                if pending.is_empty() {
-                    if !has_active_tasks(&app) {
-                        running.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(500));
-                    continue;
-                }
-
-                for task_dto in pending {
+            rt.block_on(async {
+                loop {
                     if !running.load(Ordering::Relaxed) {
                         break;
                     }
 
-                    let engine = engine.clone();
-                    let app = app.clone();
-                    let active = active_tasks.clone();
-                    let rt = rt.clone();
+                    let active = active_tasks.lock().await.len();
+                    let concurrency = concurrency.load(Ordering::Relaxed) as usize;
 
-                    std::thread::spawn(move || {
-                        update_status(&app, &task_dto.id, "Processing", None, 0);
+                    if active >= concurrency {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        continue;
+                    }
 
-                        let _ = app.emit("batch-status", BatchStatusEvent {
-                            task_id: task_dto.id.clone(),
-                            status: "Processing".to_string(),
-                            error: None,
-                            elapsed_secs: 0,
-                        });
+                    // Only fetch as many pending rows as there is room for, so the
+                    // in-flight count never exceeds the configured concurrency.
+                    let room = (concurrency - active).max(1) as u64;
+                    let pending = get_pending(&app, room);
 
-                        let cancellation = Arc::new(Cancellation::new());
-                        rt.block_on(async {
-                            active.lock().await.insert(task_dto.id.clone(), cancellation.clone());
-                        });
-
-                        let task_id = task_dto.id.clone();
-                        let app_for_cb = app.clone();
-                        let progress_cb: ProgressCallback = Arc::new(move |p: f32, _detail: Option<String>| {
-                            let elapsed = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-                            let _ = app_for_cb.emit("batch-progress", BatchProgressEvent {
-                                task_id: task_id.clone(),
-                                progress: p,
-                                stage: if p < 0.35 { "ModelLoading".to_string() } else if p < 0.9 { "Parsing".to_string() } else { "Saving".to_string() },
-                                elapsed_secs: elapsed,
-                            });
-                        });
-
-                        let conv_task = ConversionTask {
-                            id: task_dto.id.clone(),
-                            source_path: task_dto.source_path.clone(),
-                            output_path: task_dto.output_path.clone(),
-                            status: TaskStatus::Processing,
-                            progress: 0.0,
-                            stage: ConversionStage::Queued,
-                            error: None,
-                            created_at: task_dto.created_at,
-                            completed_at: None,
-                            output_mode: task_dto.output_mode.clone(),
-                            ai_ready_opts: crate::models::task::AiReadyOpts::default(),
-                            parse_quality: task_dto.parse_quality.clone(),
-                        };
-
-                        let tid = task_dto.id.clone();
-                        let created_at = task_dto.created_at;
-
-                        let result = rt.block_on(engine.convert(&conv_task, Some(progress_cb), Some(&cancellation)));
-
-                        rt.block_on(async {
-                            active.lock().await.remove(&tid);
-                        });
-
-                        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-                        let elapsed = now.saturating_sub(created_at);
-
-                        match &result {
-                            Ok(_) => {
-                                update_status(&app, &tid, "Completed", None, elapsed);
-                                let _ = app.emit("batch-status", BatchStatusEvent {
-                                    task_id: tid, status: "Completed".to_string(), error: None, elapsed_secs: elapsed,
-                                });
-                            }
-                            Err(e) => {
-                                let status = if cancellation.cancelled() { "Cancelled" } else { "Failed" };
-                                update_status(&app, &tid, status, Some(&e.message), elapsed);
-                                let _ = app.emit("batch-status", BatchStatusEvent {
-                                    task_id: tid, status: status.to_string(), error: Some(e.message.clone()), elapsed_secs: elapsed,
-                                });
-                            }
+                    if pending.is_empty() {
+                        // Exit only when there is nothing pending AND nothing in
+                        // flight. Paused tasks are not in `active_tasks`, so they
+                        // no longer block the worker from exiting.
+                        if active == 0 {
+                            running.store(false, Ordering::Relaxed);
+                            break;
                         }
-                        emit_summary(&app);
-                    });
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        continue;
+                    }
+
+                    for task_dto in pending {
+                        if !running.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        if active_tasks.lock().await.len() >= concurrency {
+                            break;
+                        }
+
+                        let engine = engine.clone();
+                        let app = app.clone();
+                        let active = active_tasks.clone();
+                        let paused_tasks = paused_tasks.clone();
+                        let rt = rt.clone();
+
+                        std::thread::spawn(move || {
+                            let cancellation = Arc::new(Cancellation::new());
+
+                            // Register the cancellation BEFORE marking the task
+                            // Processing, so `pause_task`/`cancel_task` (which
+                            // remove from `active_tasks` and cancel) always hit a
+                            // live entry.
+                            rt.block_on(async {
+                                active.lock().await.insert(task_dto.id.clone(), cancellation.clone());
+                            });
+
+                            update_status(&app, &task_dto.id, "Processing", None, 0);
+
+                            let _ = app.emit("batch-status", BatchStatusEvent {
+                                task_id: task_dto.id.clone(),
+                                status: "Processing".to_string(),
+                                error: None,
+                                elapsed_secs: 0,
+                            });
+
+                            let task_id = task_dto.id.clone();
+                            let app_for_cb = app.clone();
+                            let progress_cb: ProgressCallback = Arc::new(move |p: f32, _detail: Option<String>| {
+                                let elapsed = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                let _ = app_for_cb.emit("batch-progress", BatchProgressEvent {
+                                    task_id: task_id.clone(),
+                                    progress: p,
+                                    stage: if p < 0.35 { "ModelLoading".to_string() } else if p < 0.9 { "Parsing".to_string() } else { "Saving".to_string() },
+                                    elapsed_secs: elapsed,
+                                });
+                            });
+
+                            let conv_task = ConversionTask {
+                                id: task_dto.id.clone(),
+                                source_path: task_dto.source_path.clone(),
+                                output_path: task_dto.output_path.clone(),
+                                status: TaskStatus::Processing,
+                                progress: 0.0,
+                                stage: ConversionStage::Queued,
+                                error: None,
+                                created_at: task_dto.created_at,
+                                completed_at: None,
+                                output_mode: task_dto.output_mode.clone(),
+                                ai_ready_opts: crate::models::task::AiReadyOpts::default(),
+                                parse_quality: task_dto.parse_quality.clone(),
+                            };
+
+                            let tid = task_dto.id.clone();
+                            let created_at = task_dto.created_at;
+
+                            let result = rt.block_on(engine.convert(&conv_task, Some(progress_cb), Some(&cancellation)));
+
+                            rt.block_on(async {
+                                active.lock().await.remove(&tid);
+                            });
+
+                            let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+                            let elapsed = now.saturating_sub(created_at);
+
+                            match &result {
+                                Ok(_) => {
+                                    update_status(&app, &tid, "Completed", None, elapsed);
+                                    let _ = app.emit("batch-status", BatchStatusEvent {
+                                        task_id: tid.clone(), status: "Completed".to_string(), error: None, elapsed_secs: elapsed,
+                                    });
+                                }
+                                Err(e) => {
+                                    let status = if cancellation.cancelled() {
+                                        // If the task was paused (cooperative
+                                        // cancel + DB already set to Paused),
+                                        // keep it Paused instead of overwriting
+                                        // with Cancelled.
+                                        let is_paused = rt.block_on(async {
+                                            paused_tasks.lock().await.remove(&tid)
+                                        });
+                                        if is_paused { "Paused" } else { "Cancelled" }
+                                    } else {
+                                        "Failed"
+                                    };
+                                    update_status(&app, &tid, status, Some(&e.message), elapsed);
+                                    let _ = app.emit("batch-status", BatchStatusEvent {
+                                        task_id: tid, status: status.to_string(), error: Some(e.message.clone()), elapsed_secs: elapsed,
+                                    });
+                                }
+                            }
+                            emit_summary(&app);
+                        });
+                    }
                 }
-            }
+            });
         };
 
         let handle = std::thread::spawn(worker);
@@ -234,6 +279,10 @@ impl BatchQueue {
         }
         drop(active);
 
+        // Mark locally so the worker can distinguish a pause from a real cancel
+        // when `convert` returns the cooperative-cancel error.
+        self.paused_tasks.lock().await.insert(task_id.to_string());
+
         update_status(app, task_id, "Paused", None, 0);
         let _ = app.emit("batch-status", BatchStatusEvent {
             task_id: task_id.to_string(), status: "Paused".to_string(), error: None, elapsed_secs: 0,
@@ -247,6 +296,8 @@ impl BatchQueue {
         engine: Arc<dyn DocumentEngine>,
         task_id: &str,
     ) -> Result<(), String> {
+        self.paused_tasks.lock().await.remove(task_id);
+
         update_status(app, task_id, "Pending", None, 0);
         let _ = app.emit("batch-status", BatchStatusEvent {
             task_id: task_id.to_string(), status: "Pending".to_string(), error: None, elapsed_secs: 0,
@@ -288,11 +339,11 @@ impl BatchQueue {
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
 
         if let Ok(db) = crate::db::db(app) {
-            for t in db.list_batch_tasks("Processing", 100, 0).unwrap_or_default() {
+            for t in db.list_batch_tasks("Processing", 100_000, 0).unwrap_or_default() {
                 let elapsed = now.saturating_sub(t.created_at);
                 update_status(app, &t.id, "Cancelled", None, elapsed);
             }
-            for t in db.list_batch_tasks("Pending", 100, 0).unwrap_or_default() {
+            for t in db.list_batch_tasks("Pending", 100_000, 0).unwrap_or_default() {
                 update_status(app, &t.id, "Cancelled", None, 0);
             }
         }
@@ -303,7 +354,7 @@ impl BatchQueue {
     pub async fn retry_failed(&self, app: &tauri::AppHandle, engine: Arc<dyn DocumentEngine>) -> Result<(), String> {
         let mut any = false;
         if let Ok(db) = crate::db::db(app) {
-            for t in db.list_batch_tasks("Failed", 100, 0).unwrap_or_default() {
+            for t in db.list_batch_tasks("Failed", 100_000, 0).unwrap_or_default() {
                 update_status(app, &t.id, "Pending", None, 0);
                 any = true;
             }
@@ -316,9 +367,13 @@ impl BatchQueue {
     }
 
     pub async fn clear_done(&self, app: &tauri::AppHandle) -> Result<(), String> {
+        // "清空列表" is expected to clear the whole list. Remove every task
+        // except those actively Processing (the UI disables this action while
+        // a conversion is in flight), so pending duplicates can be removed.
         if let Ok(db) = crate::db::db(app) {
-            let _ = db.delete_batch_tasks("Completed");
-            let _ = db.delete_batch_tasks("Cancelled");
+            for status in ["Pending", "Completed", "Cancelled", "Failed"] {
+                let _ = db.delete_batch_tasks(status);
+            }
         }
         emit_summary(app);
         Ok(())

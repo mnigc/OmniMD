@@ -2,11 +2,11 @@ import { create } from "zustand";
 import type { ModelInfo, CacheInfo, DownloadProgress } from "../types";
 import {
   listModels,
-  downloadModel,
+  downloadModel as downloadModelApi,
   cancelModelDownload,
   getCacheInfo,
   clearModelCache,
-  setModelSource,
+  setModelSource as setModelSourceApi,
   getModelSource,
   importOfflineModel,
   checkModelUpdate,
@@ -111,11 +111,11 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   downloadModel: async (modelName) => {
     set({ downloading: true });
     try {
-      await downloadModel(modelName);
+      await downloadModelApi(modelName);
       await get().refreshModels();
       await get().refreshCacheInfo();
-    } catch {
-      // ignore
+    } catch (e) {
+      console.error("downloadModel failed:", e);
     } finally {
       set({ downloading: false });
     }
@@ -142,10 +142,10 @@ export const useModelStore = create<ModelStore>((set, get) => ({
 
   setModelSource: async (source) => {
     try {
-      await setModelSource(source);
+      await setModelSourceApi(source);
       set({ modelSource: source });
-    } catch {
-      // ignore
+    } catch (e) {
+      console.error("setModelSource failed:", e);
     }
   },
 
@@ -193,8 +193,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
           }
         }
       );
-    } catch {
-      // Not running in Tauri
+    } catch (e) {
+      console.error("listenForProgress failed:", e);
     }
 
     return () => {

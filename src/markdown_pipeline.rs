@@ -234,10 +234,9 @@ pub fn cleanup(markdown: &str) -> String {
 
         let trimmed = line.trim();
 
-        // Skip page break markers.
-        if trimmed == "---" && blank_count > 0 {
-            continue;
-        }
+        // Skip page break markers (form feed character only). Note: a plain
+        // `---` horizontal rule must NOT be removed here, otherwise legitimate
+        // `<hr>` output and other `---` rules are lost.
         if trimmed.contains('\u{000c}') {
             // Form feed character (page break).
             let cleaned = trimmed.replace('\u{000c}', "");
@@ -316,7 +315,12 @@ fn remove_empty_tables(markdown: &str) -> String {
 
 fn is_table_separator(line: &str) -> bool {
     let trimmed = line.trim();
-    if !trimmed.contains('|') && !trimmed.contains('-') {
+    // A markdown table separator line must contain at least one `|`; without it
+    // a run of dashes under a `|`-less line is not a real table separator.
+    if !trimmed.contains('|') {
+        return false;
+    }
+    if !trimmed.contains('-') {
         return false;
     }
     // A separator line looks like: |---|---| or | --- | --- |
@@ -581,18 +585,27 @@ fn render_toc(markdown: &str) -> String {
 }
 
 fn slugify(text: &str) -> String {
-    let mut slug: String = text
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else if c.is_whitespace() { '-' } else { '\0' })
-        .collect();
-    // Collapse multiple dashes.
-    while slug.contains("--") {
-        slug = slug.replace("--", "-");
+    // GitHub-style slug, matching `github-slugger` (used by `rehype-slug`):
+    // lowercase; keep alphanumerics, CJK, `-` and `_`; turn whitespace into a
+    // single `-`; drop all other punctuation/control chars; collapse and trim
+    // dashes. This keeps TOC anchors (`[#slug]`) aligned with preview heading ids.
+    let lower = text.to_lowercase();
+    let mut raw = String::with_capacity(lower.len());
+    for c in lower.chars() {
+        if c.is_whitespace() {
+            raw.push('-');
+        } else if c.is_alphanumeric() || c == '-' || c == '_' {
+            raw.push(c);
+        }
+        // Other punctuation / control chars are dropped.
     }
-    slug = slug.trim_matches('-').to_string();
+    let slug = raw
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
     if slug.is_empty() {
-        // Fall back to a stable placeholder for non-latin headings.
+        // Degenerate headings made of only punctuation: keep a stable anchor.
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return format!("section-{}", n);
@@ -654,9 +667,16 @@ fn format_obsidian(markdown: &str, source_path: &str) -> String {
 }
 
 fn escape_yaml(s: &str) -> String {
-    // Quote if it contains special characters.
-    if s.contains(':') || s.contains('#') || s.contains('\n') || s.starts_with(' ') {
-        format!("\"{}\"", s.replace('"', "\\\""))
+    // Quote if it contains special characters, and escape embedded quotes and
+    // backslashes so the value stays a valid YAML double-quoted scalar.
+    if s.contains(':')
+        || s.contains('#')
+        || s.contains('\n')
+        || s.contains('"')
+        || s.contains('\\')
+        || s.starts_with(' ')
+    {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
         s.to_string()
     }
@@ -812,5 +832,32 @@ mod tests {
     fn count_table_separators_counts_only_real_separators() {
         let input = "| A | B |\n|---|---|\n| 1 | 2 |\n\ncode:\n```\n|---|\n```\n| x | y |\n|---|---|";
         assert_eq!(count_table_separators(input), 2);
+    }
+
+    #[test]
+    fn cleanup_keeps_horizontal_rule() {
+        // A horizontal rule (---) preceded by a blank line must be preserved,
+        // not deleted as a page-break artifact.
+        let input = "text\n\n---\n\nmore text";
+        let result = cleanup(input);
+        assert!(result.contains("---"));
+        assert!(result.contains("text"));
+        assert!(result.contains("more text"));
+    }
+
+    #[test]
+    fn is_table_separator_requires_pipe() {
+        assert!(!is_table_separator("----"));
+        assert!(!is_table_separator("===="));
+        // A bare `---` with no pipe is not a valid GFM delimiter row.
+        assert!(!is_table_separator("---"));
+        assert!(is_table_separator("|---|---|"));
+    }
+
+    #[test]
+    fn slugify_keeps_cjk_and_lowercases() {
+        assert_eq!(slugify("人工智能"), "人工智能");
+        assert_eq!(slugify("Section A"), "section-a");
+        assert_eq!(slugify("Hello, World!"), "hello-world");
     }
 }

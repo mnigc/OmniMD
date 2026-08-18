@@ -126,7 +126,19 @@ export function HomePage() {
       }
 
       if (files.length === 0) return;
+      // Skip files that are already queued/pending so a single drop can never
+      // produce duplicate tasks.
+      const active = new Set(
+        useBatchStore
+          .getState()
+          .tasks.filter(
+            (t) => t.status !== "Completed" && t.status !== "Failed" && t.status !== "Cancelled"
+          )
+          .map((t) => t.sourcePath)
+      );
       for (const path of files) {
+        if (active.has(path)) continue;
+        active.add(path);
         const dir = inferOutputDir(path);
         const fileName = path.split(/[\\/]/).pop() || "output";
         const outputName = fileName.replace(/\.[^.]+$/, ".md");

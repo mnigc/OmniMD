@@ -48,8 +48,9 @@ export function App() {
   const [page, setPage] = useState<Page>("home");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [appVersion, setAppVersion] = useState("v0.1.0");
-  const [batchPanelOpen, setBatchPanelOpen] = useState(false);
   const { engineMode, modelReady, downloading, downloadProgress } = useModelStore();
+  const batchPanelOpen = useBatchStore((s) => s.panelOpen);
+  const setBatchPanelOpen = useBatchStore((s) => s.setPanelOpen);
 
   useEffect(() => {
     getAppVersion().then(setAppVersion).catch(() => {});

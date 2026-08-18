@@ -114,6 +114,7 @@
     failed: "失败",
     pending: "等待中",
     total: "总计",
+    moreHidden: "还有 {n} 个任务未显示，请先清理队列",
   },
   dropzone: {
     dropDisabled: "拖拽已禁用",

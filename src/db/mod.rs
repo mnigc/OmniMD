@@ -680,6 +680,29 @@ impl WorkspaceDb {
         Ok(())
     }
 
+    /// Return the id of an existing non-terminal task for the same source path,
+    /// if one exists. Used to deduplicate the batch queue so a file dropped
+    /// multiple times (or duplicate drag-drop events) cannot create an endless
+    /// stream of identical tasks.
+    pub fn find_active_batch_task_by_source(
+        &self,
+        source_path: &str,
+    ) -> Result<Option<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id FROM batch_tasks
+                 WHERE source_path = ?1 AND status IN ('Pending', 'Processing', 'Paused')
+                 LIMIT 1",
+            )
+            .map_err(err)?;
+        let id: Option<String> = stmt
+            .query_row(rusqlite::params![source_path], |r| r.get(0))
+            .optional()
+            .map_err(err)?;
+        Ok(id)
+    }
+
     pub fn get_batch_summary(&self) -> Result<BatchSummaryDto, String> {
         let total: i64 = self
             .conn

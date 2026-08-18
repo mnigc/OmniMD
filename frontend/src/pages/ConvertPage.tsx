@@ -564,7 +564,6 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                 const fileName = sourcePath.split(/[\\/]/).pop() || "output";
                 const outputName = fileName.replace(/\.[^.]+$/, ".md");
                 const outputPath = `${dir}/${outputName}`;
-                useBatchStore.getState().enqueue(sourcePath, outputPath, outputMode);
                 setCurrentTask(
                   {
                     id: result.taskId,

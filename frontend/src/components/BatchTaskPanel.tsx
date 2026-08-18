@@ -13,6 +13,11 @@ import { BatchTaskItem } from "./BatchTaskItem";
 import { BatchTaskFilterBar } from "./BatchTaskFilterBar";
 import { BatchTaskToolbar } from "./BatchTaskToolbar";
 
+// Render at most this many task cards. A backlog of duplicate tasks can grow
+// into the thousands; rendering them all at once freezes the UI (the main
+// thread blocks), which also makes the toolbar buttons unclickable.
+const MAX_RENDERED_TASKS = 200;
+
 interface BatchTaskPanelProps {
   open: boolean;
   onClose: () => void;
@@ -41,6 +46,9 @@ export function BatchTaskPanel({ open, onClose }: BatchTaskPanelProps) {
   const filteredTasks = filter === "all"
     ? tasks
     : tasks.filter((t) => t.status.toLowerCase() === filter);
+
+  const visibleTasks = filteredTasks.slice(0, MAX_RENDERED_TASKS);
+  const hiddenCount = filteredTasks.length - visibleTasks.length;
 
   if (!open) return null;
 
@@ -83,9 +91,14 @@ export function BatchTaskPanel({ open, onClose }: BatchTaskPanelProps) {
             </div>
           ) : (
             <div className="space-y-2">
-              {filteredTasks.map((task) => (
+              {visibleTasks.map((task) => (
                 <BatchTaskItem key={task.id} task={task} />
               ))}
+              {hiddenCount > 0 && (
+                <p className="text-center text-xs text-muted-foreground py-2">
+                  {t("batch.moreHidden").replace("{n}", String(hiddenCount))}
+                </p>
+              )}
             </div>
           )}
         </ScrollArea>

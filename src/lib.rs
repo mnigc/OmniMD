@@ -326,7 +326,11 @@ async fn convert_file(
 
 /// Remove a task's cancellation entry from state after the conversion ends.
 fn cleanup_cancellation(state: &tauri::State<'_, AppState>, task_id: &str) {
-    state.cancellations.lock().unwrap().remove(task_id);
+    state
+        .cancellations
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(task_id);
 }
 
 /// Remove a completed/failed/cancelled task from the tasks map to prevent
@@ -334,17 +338,32 @@ fn cleanup_cancellation(state: &tauri::State<'_, AppState>, task_id: &str) {
 /// command return value, so the map entry is no longer needed after the task
 /// reaches a terminal state.
 fn cleanup_task(state: &tauri::State<'_, AppState>, task_id: &str) {
-    state.tasks.lock().unwrap().remove(task_id);
+    state
+        .tasks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(task_id);
 }
 
 /// Request cancellation of a running conversion task. The backend cooperatively
 /// stops at the next checkpoint.
 #[tauri::command]
-fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
+async fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
     let state = get_state(&app)?;
-    if let Some(cancellation) = state.cancellations.lock().unwrap().get(&task_id) {
-        cancellation.cancel();
+    let mut cancelled = false;
+    {
+        let guard = state.cancellations.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cancellation) = guard.get(&task_id) {
+            cancellation.cancel();
+            cancelled = true;
+        }
+    }
+    if cancelled {
         tracing::info!("Cancel requested for task {}", task_id);
+    } else {
+        // Not a single-file task: fall back to the batch queue so the same API
+        // can cancel batch tasks (avoids frontend having to pick the right one).
+        let _ = state.batch_queue.cancel_task(&app, &task_id).await;
     }
     Ok(())
 }
@@ -708,7 +727,7 @@ async fn download_url(url: String) -> Result<String, String> {
         .split('/')
         .last()
         .filter(|s| !s.is_empty() && s.contains('.'))
-        .unwrap_or("downloaded_file")
+        .unwrap_or("downloaded_file.bin")
         .to_string();
 
     let sanitized: String = filename
@@ -716,7 +735,7 @@ async fn download_url(url: String) -> Result<String, String> {
         .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
         .collect();
     let sanitized = if sanitized.is_empty() {
-        "downloaded_file".to_string()
+        "downloaded_file.bin".to_string()
     } else {
         sanitized
     };
@@ -830,6 +849,10 @@ fn batch_get_summary(app: tauri::AppHandle) -> Result<BatchSummaryDto, String> {
 #[tauri::command]
 async fn set_engine_mode(app: tauri::AppHandle, mode: String) -> Result<(), String> {
     let state = get_state(&app)?;
+    let normalized = mode.trim().to_lowercase();
+    if normalized != "local" && normalized != "cloud" {
+        return Err(format!("无效的引擎模式: {}（仅支持 local 或 cloud）", mode));
+    }
     let mode = EngineMode::from_str(&mode);
     state
         .model_manager

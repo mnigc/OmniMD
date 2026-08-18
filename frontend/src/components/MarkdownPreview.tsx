@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import rehypeSlug from "rehype-slug";
 import { useI18n } from "../i18n";
 
 interface MarkdownPreviewProps {
@@ -23,10 +24,10 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
 
   return (
     <div className="markdown-body">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeRaw]}
-        components={{
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeRaw, rehypeSlug]}
+          components={{
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "");
             return match ? (
