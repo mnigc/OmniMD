@@ -18,6 +18,8 @@ pub struct BatchProgressEvent {
     pub progress: f32,
     pub stage: String,
     pub elapsed_secs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +170,22 @@ impl BatchQueue {
                             break;
                         }
 
+                        // Claim the task synchronously (mark Processing in the DB
+                        // AND register its cancellation in `active_tasks`) BEFORE
+                        // spawning, so a subsequent `get_pending` can never return
+                        // this task again and spawn a duplicate conversion thread.
+                        let tid = task_dto.id.clone();
+                        update_status(&app, &tid, "Processing", None, 0);
+                        let cancellation = Arc::new(Cancellation::new());
+                        active_tasks.lock().await.insert(tid.clone(), cancellation.clone());
+
+                        let _ = app.emit("batch-status", BatchStatusEvent {
+                            task_id: tid.clone(),
+                            status: "Processing".to_string(),
+                            error: None,
+                            elapsed_secs: 0,
+                        });
+
                         let engine = engine.clone();
                         let app = app.clone();
                         let active = active_tasks.clone();
@@ -175,34 +193,18 @@ impl BatchQueue {
                         let rt = rt.clone();
 
                         std::thread::spawn(move || {
-                            let cancellation = Arc::new(Cancellation::new());
-
-                            // Register the cancellation BEFORE marking the task
-                            // Processing, so `pause_task`/`cancel_task` (which
-                            // remove from `active_tasks` and cancel) always hit a
-                            // live entry.
-                            rt.block_on(async {
-                                active.lock().await.insert(task_dto.id.clone(), cancellation.clone());
-                            });
-
-                            update_status(&app, &task_dto.id, "Processing", None, 0);
-
-                            let _ = app.emit("batch-status", BatchStatusEvent {
-                                task_id: task_dto.id.clone(),
-                                status: "Processing".to_string(),
-                                error: None,
-                                elapsed_secs: 0,
-                            });
-
-                            let task_id = task_dto.id.clone();
+                            let task_id = tid.clone();
+                            let task_created_at = task_dto.created_at;
                             let app_for_cb = app.clone();
-                            let progress_cb: ProgressCallback = Arc::new(move |p: f32, _detail: Option<String>| {
-                                let elapsed = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+                            let progress_cb: ProgressCallback = Arc::new(move |p: f32, detail: Option<String>| {
+                                let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                let elapsed = now.saturating_sub(task_created_at);
                                 let _ = app_for_cb.emit("batch-progress", BatchProgressEvent {
                                     task_id: task_id.clone(),
                                     progress: p,
                                     stage: if p < 0.35 { "ModelLoading".to_string() } else if p < 0.9 { "Parsing".to_string() } else { "Saving".to_string() },
                                     elapsed_secs: elapsed,
+                                    detail,
                                 });
                             });
 
@@ -221,7 +223,6 @@ impl BatchQueue {
                                 parse_quality: task_dto.parse_quality.clone(),
                             };
 
-                            let tid = task_dto.id.clone();
                             let created_at = task_dto.created_at;
 
                             let result = rt.block_on(engine.convert(&conv_task, Some(progress_cb), Some(&cancellation)));
@@ -262,6 +263,10 @@ impl BatchQueue {
                             emit_summary(&app);
                         });
                     }
+
+                    // Small backoff so the loop never busy-spins even if the DB
+                    // writes from the spawned threads lag behind the next fetch.
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             });
         };

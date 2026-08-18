@@ -520,11 +520,20 @@ async fn fetch_url(
     state.tasks.lock().unwrap().insert(task.id.clone(), task.clone());
     emit_progress(&app, &task);
 
-    if cancellation.cancelled() {
-        cleanup_cancellation(&state, &task.id);
-        cleanup_task(&state, &task.id);
-        return Err("cancelled".to_string());
-    }
+    // Helper to check cancellation and clean up if cancelled.
+    let check_cancelled = |task: &mut ConversionTask, state: &tauri::State<'_, AppState>| -> Result<(), String> {
+        if cancellation.cancelled() {
+            task.status = TaskStatus::Cancelled;
+            task.error = Some("任务已取消".to_string());
+            emit_status(&app, task);
+            cleanup_cancellation(state, &task.id);
+            cleanup_task(state, &task.id);
+            return Err("cancelled".to_string());
+        }
+        Ok(())
+    };
+
+    check_cancelled(&mut task, &state)?;
 
     task.stage = ConversionStage::Fetching;
     task.progress = 0.3;
@@ -532,14 +541,7 @@ async fn fetch_url(
 
     let html = web_extractor::fetch_html(&url).await?;
 
-    if cancellation.cancelled() {
-        task.status = TaskStatus::Cancelled;
-        task.error = Some("任务已取消".to_string());
-        emit_status(&app, &task);
-        cleanup_cancellation(&state, &task.id);
-        cleanup_task(&state, &task.id);
-        return Err("cancelled".to_string());
-    }
+    check_cancelled(&mut task, &state)?;
 
     task.stage = ConversionStage::Parsing;
     task.progress = 0.5;
@@ -552,14 +554,7 @@ async fn fetch_url(
     task.progress = 0.7;
     emit_progress(&app, &task);
 
-    if cancellation.cancelled() {
-        task.status = TaskStatus::Cancelled;
-        task.error = Some("任务已取消".to_string());
-        emit_status(&app, &task);
-        cleanup_cancellation(&state, &task.id);
-        cleanup_task(&state, &task.id);
-        return Err("cancelled".to_string());
-    }
+    check_cancelled(&mut task, &state)?;
 
     let markdown = markdown_pipeline::process(
         &extracted.markdown,
@@ -573,14 +568,7 @@ async fn fetch_url(
         std::fs::create_dir_all(output_dir_path).map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
-    if cancellation.cancelled() {
-        task.status = TaskStatus::Cancelled;
-        task.error = Some("任务已取消".to_string());
-        emit_status(&app, &task);
-        cleanup_cancellation(&state, &task.id);
-        cleanup_task(&state, &task.id);
-        return Err("cancelled".to_string());
-    }
+    check_cancelled(&mut task, &state)?;
 
     task.stage = ConversionStage::Saving;
     task.progress = 0.9;

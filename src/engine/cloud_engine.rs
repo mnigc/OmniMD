@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -77,6 +78,9 @@ impl CloudEngine {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(600))
+            // Browser-like UA: the MinerU CDN/WAF can reset connections from
+            // clients that send no User-Agent at all.
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
             .build()
             .unwrap_or_default();
         CloudEngine {
@@ -349,29 +353,67 @@ impl CloudEngine {
         if let Some(cb) = &on_progress {
             cb(0.85, Some("下载结果".to_string()));
         }
-        let resp = self.client.get(url).send().await.map_err(|e| ConversionError {
-            code: ErrorCode::EngineError,
-            message: format!("下载云端结果失败: {}", e),
-            stage: ConversionStage::PostProcessing,
-            retryable: true,
-            page: None,
-        })?;
-        if !resp.status().is_success() {
-            return Err(ConversionError {
-                code: ErrorCode::EngineError,
-                message: format!("下载云端结果失败 ({})", resp.status()),
-                stage: ConversionStage::PostProcessing,
-                retryable: true,
-                page: None,
-            });
+        let mut last_err = String::new();
+        for attempt in 0..3 {
+            let req = self
+                .client
+                .get(url)
+                // Force HTTP/1.1: some CDNs reset HTTP/2 connections from
+                // non-browser clients mid-handshake.
+                .version(reqwest::Version::HTTP_11)
+                // OpenXLab CDN enforces Referer-based hotlink protection.
+                .header("Referer", "https://mineru.net/")
+                .header("Accept", "text/plain,text/markdown,*/*");
+            match req.send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    return resp.text().await.map_err(|e| ConversionError {
+                        code: ErrorCode::EngineError,
+                        message: format!("读取云端结果失败: {}", e),
+                        stage: ConversionStage::PostProcessing,
+                        retryable: true,
+                        page: None,
+                    });
+                }
+                Ok(resp) => {
+                    let status_code = resp.status();
+                    return Err(ConversionError {
+                        code: ErrorCode::EngineError,
+                        message: format!("下载云端结果失败 ({})", status_code),
+                        stage: ConversionStage::PostProcessing,
+                        retryable: true,
+                        page: None,
+                    });
+                }
+                Err(e) => {
+                    last_err = format!("{} ({})", e, reqwest_chain(&e));
+                    tokio::time::sleep(Duration::from_secs(attempt as u64 + 1)).await;
+                }
+            }
         }
-        resp.text().await.map_err(|e| ConversionError {
+        Err(ConversionError {
             code: ErrorCode::EngineError,
-            message: format!("读取云端结果失败: {}", e),
+            message: format!("下载云端结果失败: {}", last_err),
             stage: ConversionStage::PostProcessing,
             retryable: true,
             page: None,
         })
+    }
+}
+
+/// Flatten the reqwest error chain (e.g. `error sending request` ->
+/// `client error` -> `connection reset`) so the real cause is visible in the
+/// UI instead of only the generic wrapper message.
+fn reqwest_chain(e: &reqwest::Error) -> String {
+    let mut parts = Vec::new();
+    let mut src = e.source();
+    while let Some(s) = src {
+        parts.push(s.to_string());
+        src = s.source();
+    }
+    if parts.is_empty() {
+        e.to_string()
+    } else {
+        parts.join(" | ")
     }
 }
 

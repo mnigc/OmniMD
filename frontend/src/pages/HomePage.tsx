@@ -50,13 +50,16 @@ import {
 
 const CLOUD_EXTENSIONS = [
   "pdf", "docx", "pptx", "xlsx",
-  "png", "jpg", "jpeg", "jp2", "webp", "gif", "bmp",
+  "doc", "ppt", "xls",
+  "png", "jpg", "jpeg", "jp2", "webp", "gif", "bmp", "tiff", "tif",
+  "epub", "csv", "txt", "html", "htm", "md", "markdown",
+  "rtf", "odt", "ods", "odp",
 ];
 
 export function HomePage() {
   const { t } = useI18n();
   const { tasks, summary, start, loading, cancelAll, retryFailed, clearDone, enqueue, setPanelOpen } = useBatchStore();
-  const { outputMode, defaultOutputDir, allowOnline } = useSettingsStore();
+  const { outputMode, defaultOutputDir, allowOnline, parseQuality } = useSettingsStore();
   const { engineMode } = useModelStore();
 
   const [outputDir, setOutputDir] = useState(defaultOutputDir);
@@ -84,6 +87,13 @@ export function HomePage() {
     if (outputLocationMode === "custom" && !outputDir)
       setOutputDir(defaultOutputDir);
   }, [defaultOutputDir, outputLocationMode]);
+
+  // Load any tasks persisted from a previous session so the queue is not
+  // empty on first paint.
+  useEffect(() => {
+    useBatchStore.getState().refreshTasks();
+    useBatchStore.getState().refreshSummary();
+  }, []);
 
   const inferOutputDir = useCallback(
     (path: string): string => {
@@ -136,6 +146,7 @@ export function HomePage() {
           )
           .map((t) => t.sourcePath)
       );
+      // Collect all enqueue calls first, then batch refresh
       for (const path of files) {
         if (active.has(path)) continue;
         active.add(path);
@@ -143,10 +154,17 @@ export function HomePage() {
         const fileName = path.split(/[\\/]/).pop() || "output";
         const outputName = fileName.replace(/\.[^.]+$/, ".md");
         const outputPath = `${dir}/${outputName}`;
-        await enqueue(path, outputPath, outputMode);
+        const taskId = await enqueue(path, outputPath, outputMode, parseQuality);
+        if (!taskId) {
+          console.error("Failed to enqueue:", path);
+          showToast(t("toast.filePickFailed"), 3000);
+        }
       }
+      // Single batched refresh after all enqueues
+      await useBatchStore.getState().refreshTasks();
+      await useBatchStore.getState().refreshSummary();
     },
-    [inferOutputDir, outputMode, enqueue, engineMode, t]
+    [inferOutputDir, outputMode, parseQuality, enqueue, engineMode, t]
   );
 
   const addInputPaths = useCallback(async (paths: string[]) => {
@@ -199,16 +217,21 @@ export function HomePage() {
       const urlName = url.split("/").pop()?.split("?")[0] || "page";
       const outputName = urlName.replace(/\.[^.]+$/, "") + ".md";
       const outputPath = `${dir}/${outputName}`;
-      await enqueue(url, outputPath, outputMode);
+      await enqueue(url, outputPath, outputMode, parseQuality);
       setUrlInput("");
     } catch (err: any) {
       setUrlError(err.message || String(err));
     } finally {
       setDownloading(false);
     }
-  }, [urlInput, outputMode, inferOutputDir, allowOnline, enqueue, t]);
+  }, [urlInput, outputMode, parseQuality, inferOutputDir, allowOnline, enqueue, t]);
 
-  const previewTasks = tasks.filter((t) => t.status === "Pending" || t.status === "Processing").slice(0, 5);
+  const previewTasks = [...tasks]
+    .sort((a, b) => {
+      const rank = (s: string) => (s === "Processing" ? 0 : s === "Pending" ? 1 : s === "Failed" ? 3 : 2);
+      return rank(a.status) - rank(b.status);
+    })
+    .slice(0, 5);
   const totalTasks = tasks.length;
   const pendingCount = tasks.filter((t) => t.status === "Pending").length;
   const processingCount = tasks.filter((t) => t.status === "Processing").length;

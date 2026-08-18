@@ -72,8 +72,6 @@ export const useBatchStore = create<BatchStore>((set, get) => ({
   enqueue: async (sourcePath, outputPath, outputMode, parseQuality) => {
     try {
       const id = await batchEnqueue(sourcePath, outputPath, outputMode as any, parseQuality as any);
-      await get().refreshSummary();
-      await get().refreshTasks();
       return id;
     } catch (e) {
       return null;
@@ -84,6 +82,8 @@ export const useBatchStore = create<BatchStore>((set, get) => ({
     set({ loading: true });
     try {
       await batchStart();
+      await get().refreshTasks();
+      await get().refreshSummary();
     } catch {
       // ignore
     } finally {

@@ -162,6 +162,7 @@ export interface BatchProgressEvent {
   progress: number;
   stage: string;
   elapsedSecs: number;
+  detail?: string;
 }
 
 export interface BatchStatusEvent {

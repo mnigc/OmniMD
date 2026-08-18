@@ -207,6 +207,8 @@
   },
   toast: {
     copied: "复制成功",
+    filePickFailed: "选择文件失败，请重试",
+    folderPickFailed: "选择文件夹失败，请重试",
   },
   theme: {
     light: "浅色",

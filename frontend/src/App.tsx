@@ -35,6 +35,7 @@ import { ToastPortal, showToast } from "./lib/toast";
 import { useTaskStore } from "./store/useTaskStore";
 import { useBatchStore } from "./store/useBatchStore";
 import { useModelStore } from "./store/useModelStore";
+import { useSettingsStore } from "./store/useSettingsStore";
 import { BatchTaskPanel } from "./components/BatchTaskPanel";
 import { ModelBanner } from "./components/ModelBanner";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -69,12 +70,15 @@ export function App() {
 
           const outputDir = await getDefaultOutputDir();
           const batchStore = useBatchStore.getState();
+          const settingsStore = useSettingsStore.getState();
           for (const file of files) {
             const fileName = file.split(/[\\/]/).pop() || "output";
             const outputName = fileName.replace(/\.[^.]+$/, ".md");
             const outputPath = `${outputDir}/${outputName}`;
-            await batchStore.enqueue(file, outputPath, "aiReady");
+            await batchStore.enqueue(file, outputPath, settingsStore.outputMode, settingsStore.parseQuality);
           }
+          await batchStore.refreshTasks();
+          await batchStore.refreshSummary();
           showToast(
             `${files.length} file${files.length > 1 ? "s" : ""} queued for conversion`,
             2000,
@@ -157,6 +161,11 @@ export function App() {
     await useModelStore.getState().setEngineModeAction("cloud");
   }, []);
 
+  // Close batch panel when page changes to avoid stale event listeners
+  useEffect(() => {
+    setBatchPanelOpen(false);
+  }, [page, setBatchPanelOpen]);
+
   const handleNewMarkdown = useCallback(async () => {
     const ws = await getActiveWorkspace();
     if (!ws) { showToast(t("editor.newFileHint")); return; }
@@ -231,9 +240,9 @@ export function App() {
             variant="ghost"
             size="sm"
             onClick={() => {
+              setBatchPanelOpen(true);
               useBatchStore.getState().refreshTasks();
               useBatchStore.getState().refreshSummary();
-              setBatchPanelOpen(true);
             }}
             className="text-xs gap-1.5"
           >
