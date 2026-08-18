@@ -26,7 +26,7 @@ export function DropZone({
   const [isDragging, setIsDragging] = useState(false);
   const [isFolderDrag, setIsFolderDrag] = useState(false);
   const tauriDndReady = useRef(false);
-  const dropHandledNatively = useRef(false);
+const dropHandledNatively = useRef(false);
   // Keep the latest `onFiles` in a ref so the native drag-drop listener can be
   // attached exactly once for the component's lifetime. Attaching inside an
   // effect keyed on `onFiles` leaks listeners (the async `unlisten` is still
@@ -34,12 +34,8 @@ export function DropZone({
   // same file multiple times.
   const onFilesRef = useRef(onFiles);
   onFilesRef.current = onFiles;
-  const { engineMode, modelReady } = useModelStore();
-  // Informational only: model readiness is enforced at conversion time (the
-  // engine reports a clear error), so the drop zone must never silently block
-  // file selection — that made the app appear completely unresponsive when the
-  // model directory check disagreed with where models actually live.
-  const disabled = !modelReady && engineMode === "local";
+  const { modelReady } = useModelStore();
+  const disabled = !modelReady;
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
@@ -50,6 +46,10 @@ export function DropZone({
         const appWindow = getCurrentWebviewWindow();
         unlisten = await appWindow.onDragDropEvent((event) => {
           const type = event.payload.type;
+          const isDisabled = () => {
+            const s = useModelStore.getState();
+            return !s.modelReady;
+          };
           if (type === "enter") {
             const paths = (event.payload as { paths?: string[] }).paths ?? [];
             const single = paths.length === 1 ? paths[0] : undefined;
@@ -125,6 +125,8 @@ export function DropZone({
     (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      const s = useModelStore.getState();
+      if (!s.modelReady) return;
       setIsDragging(true);
     },
     []
@@ -231,8 +233,8 @@ export function DropZone({
             disabled ? "text-destructive" : "text-muted-foreground/80"
           )}
         >
-          {engineMode === "cloud"
-            ? t("dropzone.cloudLimits")
+{disabled
+            ? t("dropzone.disabledHint")
             : t("dropzone.localLimits")}
         </p>
       </div>

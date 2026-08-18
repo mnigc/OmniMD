@@ -10,13 +10,11 @@ import {
   getModelSource,
   importOfflineModel,
   checkModelUpdate,
-  getEngineMode,
-  setEngineMode,
   isModelDownloaded,
 } from "../api/tauriApi";
-import type { EngineMode } from "../api/tauriApi";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { showToast } from "../lib/toast";
 
 interface ModelStore {
   models: ModelInfo[];
@@ -25,14 +23,11 @@ interface ModelStore {
   downloading: boolean;
   downloadProgress: Record<string, DownloadProgress>;
   loading: boolean;
-  engineMode: EngineMode;
   modelReady: boolean;
 
   refreshModels: () => Promise<void>;
   refreshCacheInfo: () => Promise<void>;
   refreshModelSource: () => Promise<void>;
-  refreshEngineMode: () => Promise<void>;
-  setEngineModeAction: (mode: EngineMode) => Promise<void>;
   refreshModelReady: () => Promise<void>;
   downloadModel: (modelName: string) => Promise<void>;
   cancelDownload: () => Promise<void>;
@@ -50,7 +45,6 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   downloading: false,
   downloadProgress: {},
   loading: false,
-  engineMode: "local",
   modelReady: true,
 
   refreshModels: async () => {
@@ -81,24 +75,6 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     }
   },
 
-  refreshEngineMode: async () => {
-    try {
-      const mode = await getEngineMode();
-      set({ engineMode: mode });
-    } catch {
-      // ignore
-    }
-  },
-
-  setEngineModeAction: async (mode) => {
-    try {
-      await setEngineMode(mode);
-      set({ engineMode: mode });
-    } catch {
-      // ignore
-    }
-  },
-
   refreshModelReady: async () => {
     try {
       const ready = await isModelDownloaded();
@@ -109,13 +85,14 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   },
 
   downloadModel: async (modelName) => {
-    set({ downloading: true });
+    set({ downloading: true, downloadProgress: {} });
     try {
       await downloadModelApi(modelName);
       await get().refreshModels();
       await get().refreshCacheInfo();
-    } catch (e) {
-      console.error("downloadModel failed:", e);
+} catch (e: any) {
+      const msg = typeof e === "string" ? e : e?.message ?? String(e ?? "未知错误");
+      showToast(msg, 6000);
     } finally {
       set({ downloading: false });
     }

@@ -209,3 +209,9 @@ export interface DownloadProgress {
   speed: string;
   stage: string;
 }
+
+export interface PythonSetupProgress {
+  stage: string;
+  progress: number;
+  detail: string;
+}

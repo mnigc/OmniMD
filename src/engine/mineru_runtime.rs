@@ -1,4 +1,5 @@
 use std::io::BufRead;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -18,6 +19,7 @@ pub struct MinerURuntime {
     child: Mutex<Option<Child>>,
     stopping: AtomicBool,
     pub base_url: String,
+    install_dir: PathBuf,
 }
 
 const HEALTH_TIMEOUT_SECS: u64 = 120;
@@ -25,12 +27,13 @@ const START_BACKOFF_SECS: u64 = 3;
 const MAX_RESTART_ATTEMPTS: u32 = 3;
 
 impl MinerURuntime {
-    pub fn new(port: u16) -> Self {
+    pub fn new(port: u16, install_dir: PathBuf) -> Self {
         MinerURuntime {
             port,
             child: Mutex::new(None),
             stopping: AtomicBool::new(false),
             base_url: format!("http://127.0.0.1:{}", port),
+            install_dir,
         }
     }
 
@@ -58,13 +61,26 @@ impl MinerURuntime {
 
         info!("Starting mineru-api on port {}", self.port);
 
-        #[cfg(target_os = "windows")]
-        let program = "mineru-api";
+        // Try bundled Python first, then fall back to system PATH.
+        let bundled_py = self.install_dir.join("python").join("python.exe");
+        let (mut cmd, _args): (Command, &str) = if bundled_py.exists() {
+            info!("Using bundled Python at {}", bundled_py.display());
+            let mut c = Command::new(&bundled_py);
+            c.arg("-m").arg("mineru_api");
+            (c, bundled_py.to_str().unwrap_or("python.exe"))
+        } else {
+            info!("Bundled Python not found, falling back to system PATH");
+            let c = Command::new("mineru-api");
+            (c, "mineru-api")
+        };
 
-        #[cfg(not(target_os = "windows"))]
-        let program = "mineru-api";
+        let cmd_name = if bundled_py.exists() {
+            bundled_py.to_string_lossy().to_string()
+        } else {
+            "mineru-api".to_string()
+        };
 
-        let mut child = Command::new(program)
+        let mut child = cmd
             .arg("--host")
             .arg("127.0.0.1")
             .arg("--port")
@@ -75,7 +91,7 @@ impl MinerURuntime {
             .map_err(|e| {
                 format!(
                     "无法启动 mineru-api（{}）。请确认 MinerU 已安装并可通过命令行访问。原始错误：{}",
-                    program, e
+                    cmd_name, e
                 )
             })?;
 

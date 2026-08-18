@@ -164,8 +164,8 @@ export async function listFavorites(workspaceId: number): Promise<LibraryDocumen
   return invoke<LibraryDocument[]>("list_favorites", { workspaceId });
 }
 
-export async function listRecent(limit?: number): Promise<LibraryDocument[]> {
-  return invoke<LibraryDocument[]>("list_recent", { limit: limit ?? 20 });
+export async function listRecent(workspaceId?: number, limit?: number): Promise<LibraryDocument[]> {
+  return invoke<LibraryDocument[]>("list_recent", { workspaceId: workspaceId ?? null, limit: limit ?? 20 });
 }
 
 export async function setDocumentFavorite(
@@ -231,6 +231,10 @@ export async function batchRetryFailed(): Promise<void> {
   return invoke<void>("batch_retry_failed");
 }
 
+export async function batchRetryTask(taskId: string): Promise<void> {
+  return invoke<void>("batch_retry_task", { taskId });
+}
+
 export async function batchClearDone(): Promise<void> {
   return invoke<void>("batch_clear_done");
 }
@@ -289,18 +293,14 @@ export async function checkModelUpdate(modelName: string): Promise<boolean> {
   return invoke<boolean>("check_model_update", { modelName });
 }
 
-// ---- Engine mode API ----
-
-export type EngineMode = "local" | "cloud";
-
-export async function getEngineMode(): Promise<EngineMode> {
-  return invoke<EngineMode>("get_engine_mode");
-}
-
-export async function setEngineMode(mode: EngineMode): Promise<void> {
-  return invoke<void>("set_engine_mode", { mode });
-}
-
 export async function isModelDownloaded(): Promise<boolean> {
   return invoke<boolean>("is_model_downloaded");
+}
+
+export async function checkPythonEnvironment(): Promise<boolean> {
+  return invoke<boolean>("check_python_environment");
+}
+
+export async function setupPythonEnvironment(): Promise<void> {
+  return invoke<void>("setup_python_environment");
 }

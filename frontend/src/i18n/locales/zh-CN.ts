@@ -125,10 +125,8 @@
     selected: "已选择",
     files: "个文件",
     folderDetected: "检测到文件夹",
-    cloudLimits: "云端解析限制：单文件 ≤10MB · ≤20 页 · 支持 PDF/图片/Docx/PPTx/Xlsx · 仅 Markdown",
     localLimits: "本地模型限制：单文件 ≤200MB · ≤200 页 · 支持 PDF/图片/Word/PPT/Excel",
-    disabledHint: "基础模型未下载，本地解析不可用，请先下载基础模型或临时启用云端解析",
-    cloudSkipToast: "云端解析已跳过 {n} 个不支持的格式：{files}。云端仅支持 PDF/图片/Docx/PPTx/Xlsx 文件",
+    disabledHint: "基础模型未下载，本地解析不可用，请先下载基础模型",
   },
   taskStatus: {
     pending: "等待中",
@@ -207,8 +205,10 @@
   },
   toast: {
     copied: "复制成功",
-    filePickFailed: "选择文件失败，请重试",
+filePickFailed: "选择文件失败，请重试",
     folderPickFailed: "选择文件夹失败，请重试",
+    aiReadyTip: "AI Ready 模式已开启。可在「设置」中切换「目录」和「元信息」以优化 RAG/LLM 管线的 Markdown 输出。",
+    onlineNotAllowed: "在线访问已禁用。请在「设置」中开启「允许联网」以抓取 URL。",
   },
   theme: {
     light: "浅色",
@@ -264,10 +264,8 @@
   banner: {
     text: "基础模型未下载，本地解析不可用",
     download: "下载离线模型 (1.8GB)",
-    useCloud: "临时用云端",
     downloading: "正在下载离线模型…",
     cancel: "取消下载",
-    cloudMode: "云端解析",
   },
   model: {
     title: "模型管理",
@@ -301,8 +299,6 @@
     gpuOptional: "显卡可选",
     cpuSupported: "仅 CPU 可运行",
     cpuNotSupported: "需要独立显卡",
-    cloudToggle: "云端解析",
-    cloudToggleHint: "≤10MB/≤20 页，无需下载模型，需联网",
   },
 } as const;
 

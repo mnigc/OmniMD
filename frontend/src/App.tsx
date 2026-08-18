@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
 import {
-  Cloud,
   Eye,
   Clock,
   Home,
@@ -30,6 +29,8 @@ import {
   writeTextFile,
   scanWorkspace,
   startMineru,
+  checkPythonEnvironment,
+  setupPythonEnvironment,
 } from "./api/tauriApi";
 import { ToastPortal, showToast } from "./lib/toast";
 import { useTaskStore } from "./store/useTaskStore";
@@ -40,7 +41,7 @@ import { BatchTaskPanel } from "./components/BatchTaskPanel";
 import { ModelBanner } from "./components/ModelBanner";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
-import type { ModelInfo } from "./types";
+import type { ModelInfo, PythonSetupProgress } from "./types";
 
 type Page = "home" | "library" | "convert" | "history" | "settings";
 
@@ -49,7 +50,7 @@ export function App() {
   const [page, setPage] = useState<Page>("home");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [appVersion, setAppVersion] = useState("v0.1.0");
-  const { engineMode, modelReady, downloading, downloadProgress } = useModelStore();
+const { modelReady, downloading, downloadProgress } = useModelStore();
   const batchPanelOpen = useBatchStore((s) => s.panelOpen);
   const setBatchPanelOpen = useBatchStore((s) => s.setPanelOpen);
 
@@ -105,16 +106,44 @@ export function App() {
     return cleanup;
   }, []);
 
-  // First-launch check: whether the local pipeline model exists and which
-  // engine mode is persisted. Also registers the model download progress
-  // listener shared with the Settings page.
+  // Register batch-task event listeners once at the app level so HomePage and
+  // other pages receive live status/progress updates even when the batch panel
+  // is closed. (Previously listeners were only registered while the panel was
+  // open, so clicking "start" from the home page appeared to do nothing.)
+  useEffect(() => {
+    let cleanup: (() => void) | null = null;
+    (async () => {
+      try {
+        cleanup = await useBatchStore.getState().listenForEvents();
+      } catch {
+        // Not running in Tauri
+      }
+    })();
+    return () => cleanup?.();
+  }, []);
+
+  // Sync the persisted concurrency setting to the backend on startup.
+  useEffect(() => {
+    const stored = useSettingsStore.getState().concurrency;
+    useBatchStore.getState().setConcurrency(stored);
+  }, []);
+
+  // Load persisted batch tasks from the DB on startup so the queue is not
+  // empty after a restart. (Tasks survive in SQLite across sessions.)
+  useEffect(() => {
+    useBatchStore.getState().refreshTasks();
+    useBatchStore.getState().refreshSummary();
+  }, []);
+
+  // First-launch check: whether the local pipeline model exists.
+  // Also registers the model download progress listener shared with the
+  // Settings page.
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     (async () => {
       try {
         const store = useModelStore.getState();
         await store.refreshModelReady();
-        await store.refreshEngineMode();
         unlisten = await store.listenForProgress();
       } catch {
         // Not running in Tauri
@@ -125,20 +154,57 @@ export function App() {
     };
   }, []);
 
-  // React to pipeline model downloads that happen elsewhere (e.g. the
-  // Settings page): mark the model ready and, if cloud mode was chosen only
-  // because no local model existed, switch back to the local engine.
+  // Listen for Python setup progress (auto-setup triggered by model download).
   useEffect(() => {
-    const checkModelReady = (models: ModelInfo[]) => {
+    let unlisten: (() => void) | null = null;
+    (async () => {
+      try {
+        const appWindow = getCurrentWebviewWindow();
+        unlisten = await appWindow.listen<PythonSetupProgress>(
+          "python-setup-progress",
+          (event) => {
+            const p = event.payload;
+            if (p.stage === "downloading") {
+              showToast(`正在下载 Python 运行时…`, 120000);
+            } else if (p.stage === "extracting") {
+              showToast(`正在解压 Python 运行时…`, 120000);
+            } else if (p.stage === "installing") {
+              showToast(`正在安装 mineru-api…`, 120000);
+            } else if (p.stage === "completed") {
+              showToast(`Python 运行环境安装完成`, 3000);
+            } else if (p.stage === "error") {
+              showToast(`Python 环境安装失败: ${p.detail}`, 6000);
+            }
+          }
+        );
+      } catch {}
+    })();
+    return () => { unlisten?.(); };
+  }, []);
+
+  // React to pipeline model downloads that happen elsewhere (e.g. the
+  // Settings page): mark the model ready, set up Python if needed, and
+  // auto-start the MinerU engine.
+  useEffect(() => {
+    const checkModelReady = async (models: ModelInfo[]) => {
       const pipelineReady = models.some(
         (m) => m.name === "pipeline" && m.status === "downloaded"
       );
       if (!pipelineReady) return;
       useModelStore.getState().refreshModelReady();
-      const state = useModelStore.getState();
-      if (state.engineMode === "cloud") {
-        state.setEngineModeAction("local");
+
+      // Ensure the Python environment (bundled Python + mineru-api) is set up.
+      const pyReady = await checkPythonEnvironment().catch(() => false);
+      if (!pyReady) {
+        try {
+          await setupPythonEnvironment();
+        } catch {
+          // Python setup failed; the user can try from Settings page.
+          return;
+        }
       }
+
+      startMineru().catch(() => {});
     };
     checkModelReady(useModelStore.getState().models);
     const unsub = useModelStore.subscribe((state) => checkModelReady(state.models));
@@ -148,7 +214,6 @@ export function App() {
   const handleDownloadModel = useCallback(async () => {
     const store = useModelStore.getState();
     await store.downloadModel("pipeline");
-    await store.setEngineModeAction("local");
     try {
       await startMineru();
     } catch {
@@ -157,15 +222,10 @@ export function App() {
     await store.refreshModelReady();
   }, []);
 
-  const handleUseCloud = useCallback(async () => {
-    await useModelStore.getState().setEngineModeAction("cloud");
-  }, []);
-
   // Close batch panel when page changes to avoid stale event listeners
   useEffect(() => {
     setBatchPanelOpen(false);
   }, [page, setBatchPanelOpen]);
-
   const handleNewMarkdown = useCallback(async () => {
     const ws = await getActiveWorkspace();
     if (!ws) { showToast(t("editor.newFileHint")); return; }
@@ -227,15 +287,6 @@ export function App() {
           </span>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {engineMode === "cloud" && (
-            <span
-              className="flex items-center gap-1.5 text-xs text-muted-foreground px-2 py-1 rounded-md border border-sky-300/40 bg-sky-500/10"
-              title={t("banner.cloudMode")}
-            >
-              <Cloud size={13} className="text-sky-500" />
-              {t("banner.cloudMode")}
-            </span>
-          )}
           <Button
             variant="ghost"
             size="sm"
@@ -252,12 +303,11 @@ export function App() {
         <WindowControls />
       </header>
 
-      {!modelReady && engineMode !== "cloud" && (
+      {!modelReady && (
         <ModelBanner
           downloading={downloading}
           progress={downloadProgress.pipeline?.progress ?? 0}
           onDownload={handleDownloadModel}
-          onUseCloud={handleUseCloud}
           onCancelDownload={() => {
             useModelStore.getState().cancelDownload();
           }}

@@ -13,7 +13,7 @@ interface ModelCardProps {
 
 export function ModelCard({ model }: ModelCardProps) {
   const { t } = useI18n();
-  const { downloadModel, cancelDownload, downloading, downloadProgress, engineMode, setEngineModeAction } = useModelStore();
+  const { downloadModel, cancelDownload, downloading, downloadProgress } = useModelStore();
 
   const statusLabel = model.status === "downloaded"
     ? t("model.downloaded")
@@ -170,25 +170,6 @@ export function ModelCard({ model }: ModelCardProps) {
         );
       })()}
 
-      {/* ── Cloud fallback toggle (pipeline only) ── */}
-      {model.name === "pipeline" && (
-        <div className="mt-3 pt-3 border-t border-border/50 flex items-center justify-between gap-4">
-          <div className="flex flex-col min-w-0">
-            <span className="text-xs font-medium">{t("model.cloudToggle")}</span>
-            <span className="text-[11px] text-muted-foreground/70 mt-0.5">
-              {t("model.cloudToggleHint")}
-            </span>
-          </div>
-          <input
-            type="checkbox"
-            checked={engineMode === "cloud"}
-            onChange={(e) =>
-              setEngineModeAction(e.target.checked ? "cloud" : "local")
-            }
-            className="h-4 w-4 shrink-0"
-          />
-        </div>
-      )}
-    </div>
+      </div>
   );
 }

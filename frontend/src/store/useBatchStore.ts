@@ -9,12 +9,14 @@ import {
   batchCancelTask,
   batchCancelAll,
   batchRetryFailed,
+  batchRetryTask,
   batchClearDone,
   batchSetConcurrency,
   batchEnqueue,
 } from "../api/tauriApi";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { showToast } from "../lib/toast";
 
 interface BatchStore {
   tasks: BatchTaskDto[];
@@ -33,6 +35,7 @@ interface BatchStore {
   resumeTask: (taskId: string) => Promise<void>;
   cancelTask: (taskId: string) => Promise<void>;
   cancelAll: () => Promise<void>;
+  retryTask: (taskId: string) => Promise<void>;
   retryFailed: () => Promise<void>;
   clearDone: () => Promise<void>;
   listenForEvents: () => Promise<() => void>;
@@ -73,7 +76,8 @@ export const useBatchStore = create<BatchStore>((set, get) => ({
     try {
       const id = await batchEnqueue(sourcePath, outputPath, outputMode as any, parseQuality as any);
       return id;
-    } catch (e) {
+    } catch (e: any) {
+      showToast(e?.message || "Failed to queue file", 3000);
       return null;
     }
   },
@@ -82,10 +86,12 @@ export const useBatchStore = create<BatchStore>((set, get) => ({
     set({ loading: true });
     try {
       await batchStart();
+// The backend pushes batch-* events, but refresh here too so the UI
+      // updates immediately even if the event listeners aren't registered yet.
       await get().refreshTasks();
       await get().refreshSummary();
-    } catch {
-      // ignore
+    } catch (e: any) {
+      showToast(e?.message || "Failed to start conversion", 3000);
     } finally {
       set({ loading: false });
     }
@@ -131,13 +137,23 @@ export const useBatchStore = create<BatchStore>((set, get) => ({
     }
   },
 
+  retryTask: async (taskId) => {
+    try {
+      await batchRetryTask(taskId);
+      await get().refreshTasks();
+      await get().refreshSummary();
+    } catch (e: any) {
+      showToast(e?.message || "Failed to retry task", 3000);
+    }
+  },
+
   retryFailed: async () => {
     try {
       await batchRetryFailed();
       await get().refreshTasks();
       await get().refreshSummary();
-    } catch {
-      // ignore
+    } catch (e: any) {
+      showToast(e?.message || "Failed to retry failed tasks", 3000);
     }
   },
 
@@ -146,8 +162,8 @@ export const useBatchStore = create<BatchStore>((set, get) => ({
       await batchClearDone();
       await get().refreshTasks();
       await get().refreshSummary();
-    } catch {
-      // ignore
+    } catch (e: any) {
+      showToast(e?.message || "Failed to clear tasks", 3000);
     }
   },
 

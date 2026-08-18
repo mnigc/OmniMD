@@ -22,7 +22,6 @@ import { EditorToolbar } from "../components/EditorToolbar";
 import { SegmentedControl } from "../components/SegmentedControl";
 import { useAutoSave } from "../hooks/useAutoSave";
 import { useTaskStore } from "../store/useTaskStore";
-import { useBatchStore } from "../store/useBatchStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useI18n } from "../i18n";
 import { Button } from "../components/ui/button";

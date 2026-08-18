@@ -15,11 +15,10 @@ use db::{
     db as db_handle, DocumentDto, FolderDto, ScanResultDto, SearchHitDto, WorkspaceDto,
 };
 use engine::batch_queue::BatchQueue;
-use engine::cloud_engine::CloudEngine;
 use engine::mineru_engine::MinerUEngine;
 use engine::mineru_runtime::MinerURuntime;
-use engine::model_manager::ModelManager;
-use engine::{DocumentEngine, EngineMode};
+use engine::model_manager::{self, ModelManager};
+use engine::DocumentEngine;
 use models::ocr::{Cancellation, ProgressCallback};
 use models::task::{
     AiReadyOpts, BatchSummaryDto, BatchTaskDto, ConversionError, ConversionResult, ConversionTask,
@@ -107,26 +106,17 @@ struct AppState {
     queue_engine: Mutex<Option<Arc<dyn DocumentEngine>>>,
     batch_queue: BatchQueue,
     model_manager: ModelManager,
-    engine_mode: Mutex<EngineMode>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        let model_manager = ModelManager::new();
-        // Read the persisted engine mode so the toggle survives restarts.
-        let engine_mode = EngineMode::from_str(
-            &model_manager
-                .get_engine_mode()
-                .unwrap_or_else(|_| "local".to_string()),
-        );
         AppState {
             tasks: Mutex::new(HashMap::new()),
             cancellations: Mutex::new(HashMap::new()),
             runtime: Mutex::new(None),
             queue_engine: Mutex::new(None),
             batch_queue: BatchQueue::new(3),
-            model_manager,
-            engine_mode: Mutex::new(engine_mode),
+            model_manager: ModelManager::new(),
         }
     }
 }
@@ -138,23 +128,17 @@ impl AppState {
         if let Some(r) = guard.as_ref() {
             return r.clone();
         }
-        let runtime = Arc::new(MinerURuntime::new(18628));
+        let runtime = Arc::new(MinerURuntime::new(18628, model_manager::install_dir()));
         *guard = Some(runtime.clone());
         runtime
     }
 
-    /// Create an engine matching the current `engine_mode`. Local engines
-    /// share the lazily created MinerU runtime; the cloud engine is a pure
-    /// HTTP client to `mineru.net`.
+    /// Create a local MinerU engine sharing the lazily created runtime.
     fn create_engine(&self) -> Arc<dyn DocumentEngine> {
-        match *self.engine_mode.lock().unwrap() {
-            EngineMode::Cloud => Arc::new(CloudEngine::new()),
-            EngineMode::Local => Arc::new(MinerUEngine::new(self.mineru_runtime())),
-        }
+        Arc::new(MinerUEngine::new(self.mineru_runtime()))
     }
 
-    /// Lazily create and cache the engine for the batch queue. The cache is
-    /// invalidated whenever `engine_mode` changes.
+    /// Lazily create and cache the engine for the batch queue.
     fn queue_engine(&self) -> Arc<dyn DocumentEngine> {
         let mut guard = self.queue_engine.lock().unwrap();
         if let Some(e) = guard.as_ref() {
@@ -434,8 +418,8 @@ fn list_favorites(app: tauri::AppHandle, workspace_id: i64) -> Result<Vec<Docume
 }
 
 #[tauri::command]
-fn list_recent(app: tauri::AppHandle, limit: Option<i64>) -> Result<Vec<DocumentDto>, String> {
-    db_handle(&app)?.list_recent(limit.unwrap_or(20))
+fn list_recent(app: tauri::AppHandle, workspace_id: Option<i64>, limit: Option<i64>) -> Result<Vec<DocumentDto>, String> {
+    db_handle(&app)?.list_recent(workspace_id, limit.unwrap_or(20))
 }
 
 #[tauri::command]
@@ -460,6 +444,18 @@ fn search_documents(
     limit: Option<i64>,
 ) -> Result<Vec<SearchHitDto>, String> {
     db_handle(&app)?.search(&query, workspace_id, limit.unwrap_or(50))
+}
+
+/// Check whether the bundled Python runtime is ready for mineru-api.
+#[tauri::command]
+async fn check_python_environment() -> Result<bool, String> {
+    ModelManager::check_python_environment()
+}
+
+/// Download and set up a portable Python + mineru-api.
+#[tauri::command]
+async fn setup_python_environment(app: tauri::AppHandle) -> Result<(), String> {
+    ModelManager::setup_python_environment(&app).await
 }
 
 /// Start the MinerU runtime and wait until it is healthy. Returns engine info.
@@ -689,6 +685,7 @@ fn list_files_in_folder(path: String) -> Result<Vec<String>, String> {
 async fn download_url(url: String) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
+        .user_agent("OmniMD/0.1.0")
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
@@ -700,6 +697,25 @@ async fn download_url(url: String) -> Result<String, String> {
 
     if !response.status().is_success() {
         return Err(format!("服务器返回错误状态码: {}", response.status()));
+    }
+
+    // Accept only binary content types that represent downloadable files.
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let is_acceptable = content_type.is_empty()
+        || content_type.starts_with("application/octet-stream")
+        || content_type.starts_with("application/pdf")
+        || content_type.starts_with("application/vnd")
+        || content_type.starts_with("image/")
+        || content_type.starts_with("text/")
+        || content_type.starts_with("application/zip")
+        || content_type.starts_with("application/xml")
+        || content_type.starts_with("application/json");
+    if !is_acceptable {
+        return Err(format!("不支持的内容类型: {}", content_type));
     }
 
     let bytes = response
@@ -796,6 +812,13 @@ async fn batch_cancel_all(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn batch_retry_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
+    let state = get_state(&app)?;
+    let engine = state.queue_engine();
+    state.batch_queue.retry_task(&app, engine, &task_id).await
+}
+
+#[tauri::command]
 async fn batch_retry_failed(app: tauri::AppHandle) -> Result<(), String> {
     let state = get_state(&app)?;
     let engine = state.queue_engine();
@@ -827,37 +850,6 @@ fn batch_get_summary(app: tauri::AppHandle) -> Result<BatchSummaryDto, String> {
     db_handle(&app)?.get_batch_summary()
 }
 
-// ---------------------------------------------------------------------------
-// Engine mode commands
-// ---------------------------------------------------------------------------
-
-/// Switch between the local MinerU engine and the cloud fallback. Persists the
-/// mode to `config/mineru.json`, updates `AppState.engine_mode`, and invalidates
-/// the cached batch engine so the next conversion uses the new mode.
-#[tauri::command]
-async fn set_engine_mode(app: tauri::AppHandle, mode: String) -> Result<(), String> {
-    let state = get_state(&app)?;
-    let normalized = mode.trim().to_lowercase();
-    if normalized != "local" && normalized != "cloud" {
-        return Err(format!("无效的引擎模式: {}（仅支持 local 或 cloud）", mode));
-    }
-    let mode = EngineMode::from_str(&mode);
-    state
-        .model_manager
-        .set_engine_mode(mode.as_str().to_string())
-        .await?;
-    *state.engine_mode.lock().unwrap() = mode;
-    *state.queue_engine.lock().unwrap() = None;
-    Ok(())
-}
-
-#[tauri::command]
-fn get_engine_mode(app: tauri::AppHandle) -> Result<String, String> {
-    let state = get_state(&app)?;
-    let mode = state.model_manager.get_engine_mode()?;
-    *state.engine_mode.lock().unwrap() = EngineMode::from_str(&mode);
-    Ok(mode)
-}
 
 /// Whether the local pipeline model has been downloaded (non-empty
 /// `models/pipeline` directory). Used to decide when to show the first-launch
@@ -961,6 +953,8 @@ pub fn run() {
             if !cli_args.is_empty() {
                 let _ = app.emit("argv-files", &cli_args);
             }
+            // Mark stale Processing tasks from a previous session as Failed.
+            let _ = db::reconcile_stale_batch_tasks(app.handle());
             Ok(())
         })
         .manage(AppState::default())
@@ -998,13 +992,12 @@ pub fn run() {
             batch_resume_task,
             batch_cancel_task,
             batch_cancel_all,
+            batch_retry_task,
             batch_retry_failed,
             batch_clear_done,
             batch_set_concurrency,
             batch_list_tasks,
             batch_get_summary,
-            set_engine_mode,
-            get_engine_mode,
             is_model_downloaded,
             list_models,
             get_model_status,
@@ -1016,6 +1009,8 @@ pub fn run() {
             get_model_source,
             import_offline_model,
             check_model_update,
+            check_python_environment,
+            setup_python_environment,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

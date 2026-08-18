@@ -128,7 +128,7 @@ impl BatchQueue {
         let active_tasks = self.active_tasks.clone();
         let running = self.running.clone();
         let concurrency = self.concurrency.clone();
-        let paused_tasks = self.paused_tasks.clone();
+let paused_tasks = self.paused_tasks.clone();
 
         let worker = move || {
             rt.block_on(async {
@@ -137,7 +137,7 @@ impl BatchQueue {
                         break;
                     }
 
-                    let active = active_tasks.lock().await.len();
+let active = active_tasks.lock().await.len();
                     let concurrency = concurrency.load(Ordering::Relaxed) as usize;
 
                     if active >= concurrency {
@@ -178,7 +178,6 @@ impl BatchQueue {
                         update_status(&app, &tid, "Processing", None, 0);
                         let cancellation = Arc::new(Cancellation::new());
                         active_tasks.lock().await.insert(tid.clone(), cancellation.clone());
-
                         let _ = app.emit("batch-status", BatchStatusEvent {
                             task_id: tid.clone(),
                             status: "Processing".to_string(),
@@ -268,7 +267,7 @@ impl BatchQueue {
                     // writes from the spawned threads lag behind the next fetch.
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-            });
+});
         };
 
         let handle = std::thread::spawn(worker);
@@ -344,13 +343,38 @@ impl BatchQueue {
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
 
         if let Ok(db) = crate::db::db(app) {
-            for t in db.list_batch_tasks("Processing", 100_000, 0).unwrap_or_default() {
-                let elapsed = now.saturating_sub(t.created_at);
-                update_status(app, &t.id, "Cancelled", None, elapsed);
+// Paginate through all Processing and Pending tasks (not just 100).
+            for status in &["Processing", "Pending"] {
+                let mut offset = 0u64;
+                const PAGE: u64 = 200;
+                loop {
+                    let batch = db.list_batch_tasks(status, PAGE, offset).unwrap_or_default();
+                    if batch.is_empty() {
+                        break;
+                    }
+                    for t in &batch {
+                        let elapsed = if *status == "Processing" {
+                            now.saturating_sub(t.created_at)
+                        } else {
+                            0
+                        };
+                        update_status(app, &t.id, "Cancelled", None, elapsed);
+                    }
+                    if batch.len() < PAGE as usize {
+                        break;
+                    }
+                    offset += PAGE;
+                }
             }
-            for t in db.list_batch_tasks("Pending", 100_000, 0).unwrap_or_default() {
-                update_status(app, &t.id, "Cancelled", None, 0);
-            }
+        }
+        emit_summary(app);
+        Ok(())
+    }
+
+    pub async fn retry_task(&self, app: &tauri::AppHandle, engine: Arc<dyn DocumentEngine>, task_id: &str) -> Result<(), String> {
+        update_status(app, task_id, "Pending", None, 0);
+        if !self.is_running() {
+            self.start(app.clone(), engine).await;
         }
         emit_summary(app);
         Ok(())
@@ -359,9 +383,21 @@ impl BatchQueue {
     pub async fn retry_failed(&self, app: &tauri::AppHandle, engine: Arc<dyn DocumentEngine>) -> Result<(), String> {
         let mut any = false;
         if let Ok(db) = crate::db::db(app) {
-            for t in db.list_batch_tasks("Failed", 100_000, 0).unwrap_or_default() {
-                update_status(app, &t.id, "Pending", None, 0);
-                any = true;
+let mut offset = 0u64;
+            const PAGE: u64 = 200;
+            loop {
+                let batch = db.list_batch_tasks("Failed", PAGE, offset).unwrap_or_default();
+                if batch.is_empty() {
+                    break;
+                }
+                for t in &batch {
+                    update_status(app, &t.id, "Pending", None, 0);
+                    any = true;
+                }
+                if batch.len() < PAGE as usize {
+                    break;
+                }
+                offset += PAGE;
             }
         }
         if any && !self.is_running() {
@@ -376,7 +412,7 @@ impl BatchQueue {
         // except those actively Processing (the UI disables this action while
         // a conversion is in flight), so pending duplicates can be removed.
         if let Ok(db) = crate::db::db(app) {
-            for status in ["Pending", "Completed", "Cancelled", "Failed"] {
+for status in ["Pending", "Completed", "Cancelled", "Failed"] {
                 let _ = db.delete_batch_tasks(status);
             }
         }

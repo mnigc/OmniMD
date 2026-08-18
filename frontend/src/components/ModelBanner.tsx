@@ -1,4 +1,4 @@
-import { AlertTriangle, Cloud, Download } from "lucide-react";
+import { AlertTriangle, Download } from "lucide-react";
 import { useI18n } from "../i18n";
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
@@ -7,7 +7,6 @@ interface ModelBannerProps {
   downloading: boolean;
   progress: number;
   onDownload: () => void;
-  onUseCloud: () => void;
   onCancelDownload?: () => void;
 }
 
@@ -15,7 +14,6 @@ export function ModelBanner({
   downloading,
   progress,
   onDownload,
-  onUseCloud,
   onCancelDownload,
 }: ModelBannerProps) {
   const { t } = useI18n();
@@ -51,15 +49,6 @@ export function ModelBanner({
           <Button size="sm" className="h-6 px-2 text-[11px]" onClick={onDownload}>
             <Download size={11} className="mr-1" />
             {t("banner.download")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-6 px-2 text-[11px]"
-            onClick={onUseCloud}
-          >
-            <Cloud size={11} className="mr-1" />
-            {t("banner.useCloud")}
           </Button>
         </div>
       )}

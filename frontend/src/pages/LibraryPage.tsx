@@ -291,7 +291,7 @@ export function LibraryPage() {
       } else if (mode === "favorites") {
         setDocuments(await listFavorites(activeWs.id));
       } else {
-        setDocuments(await listRecent());
+        setDocuments(await listRecent(activeWs.id));
       }
     } catch (e) {
       showToast(String(e));

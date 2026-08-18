@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useState } from "react";
-import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Sparkles, Cpu, Database } from "lucide-react";
+import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Sparkles, Cpu, Database, Download } from "lucide-react";
 import { useI18n } from "../i18n";
 import { type ThemeMode } from "../lib/theme";
 import { useThemeMode } from "../hooks/useThemeMode";
@@ -10,9 +10,9 @@ import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { mineruStatus, startMineru, getAppVersion, type MineruStatus } from "../api/tauriApi";
+import { mineruStatus, startMineru, getAppVersion, checkPythonEnvironment, setupPythonEnvironment, type MineruStatus } from "../api/tauriApi";
 import { pickOutputDir } from "../api/dialogs";
-import type { ParseQuality } from "../types";
+import type { ParseQuality, PythonSetupProgress } from "../types";
 import { useModelStore } from "../store/useModelStore";
 import { ModelCard } from "../components/ModelCard";
 import { ModelCacheSection } from "../components/ModelCacheSection";
@@ -102,6 +102,9 @@ export function SettingsPage() {
   const [mineruStarting, setMineruStarting] = useState(false);
   const [mineruError, setMineruError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("v0.1.0");
+  const [pythonSettingUp, setPythonSettingUp] = useState(false);
+  const [pythonSetupProgress, setPythonSetupProgress] = useState<PythonSetupProgress | null>(null);
+  const [pythonReady, setPythonReady] = useState(false);
 
   const { models, refreshModels, refreshCacheInfo, refreshModelSource, listenForProgress } = useModelStore();
 
@@ -133,6 +136,34 @@ export function SettingsPage() {
     refreshMineruStatus();
   }, [refreshMineruStatus]);
 
+  // Check bundled Python status on mount.
+  useEffect(() => {
+    checkPythonEnvironment().then(setPythonReady).catch(() => {});
+  }, []);
+
+  // Listen for Python setup progress.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    (async () => {
+      try {
+        const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+        const appWindow = getCurrentWebviewWindow();
+        unlisten = await appWindow.listen<PythonSetupProgress>(
+          "python-setup-progress",
+          (event) => {
+            const p = event.payload;
+            setPythonSetupProgress(p);
+            if (p.stage === "completed") {
+              setPythonReady(true);
+              setPythonSettingUp(false);
+            }
+          }
+        );
+      } catch {}
+    })();
+    return () => { unlisten?.(); };
+  }, []);
+
   const handleStartMineru = async () => {
     setMineruStarting(true);
     setMineruError(null);
@@ -143,6 +174,17 @@ export function SettingsPage() {
       setMineruError(String(e));
     } finally {
       setMineruStarting(false);
+    }
+  };
+
+  const handleSetupPython = async () => {
+    setPythonSettingUp(true);
+    setPythonSetupProgress({ stage: "starting", progress: 0, detail: "正在准备…" });
+    try {
+      await setupPythonEnvironment();
+    } catch (e) {
+      setPythonSetupProgress({ stage: "error", progress: 0, detail: String(e) });
+      setPythonSettingUp(false);
     }
   };
 
@@ -277,6 +319,56 @@ export function SettingsPage() {
                 </div>
                 <span className="text-xs text-muted-foreground/70 mt-1.5 block">
                   {t("settings.mineruDesc")}
+                </span>
+              </div>
+              <div className="py-2.5 border-t border-border/50 pt-4">
+                <span className="text-sm text-muted-foreground block mb-2">
+                  Python 运行环境
+                </span>
+                <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                  <div className="flex flex-col gap-1 min-w-0">
+                    <span className="text-sm flex items-center gap-2">
+                      <Download size={14} className={cn(
+                        "shrink-0",
+                        pythonReady
+                          ? "text-emerald-500"
+                          : "text-muted-foreground"
+                      )} />
+                      {pythonReady
+                        ? "已就绪"
+                        : pythonSettingUp
+                          ? pythonSetupProgress?.detail ?? "正在安装…"
+                          : "未安装"}
+                    </span>
+                    {pythonSetupProgress && !pythonReady && (
+                      <div className="mt-1">
+                        <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-primary transition-all rounded-full"
+                            style={{ width: `${(pythonSetupProgress.progress * 100).toFixed(0)}%` }}
+                          />
+                        </div>
+                        <span className="text-xs text-muted-foreground mt-0.5 block">
+                          {pythonSetupProgress.detail}
+                        </span>
+                      </div>
+                    )}
+                    {pythonSetupProgress?.stage === "error" && (
+                      <span className="text-xs text-destructive break-all mt-1">
+                        {pythonSetupProgress.detail}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    disabled={pythonSettingUp || pythonReady}
+                    onClick={handleSetupPython}
+                  >
+                    {pythonSettingUp ? "安装中…" : "安装运行环境"}
+                  </Button>
+                </div>
+                <span className="text-xs text-muted-foreground/70 mt-1.5 block">
+                  自动下载并安装便携版 Python 及 mineru-api
                 </span>
               </div>
             </div>

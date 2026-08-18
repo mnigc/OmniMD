@@ -484,20 +484,36 @@ impl WorkspaceDb {
             .pipe(Ok)
     }
 
-    pub fn list_recent(&self, limit: i64) -> Result<Vec<DocumentDto>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, workspace_id, path, title, file_size, favorite, source, created_at, opened_at
-                 FROM documents WHERE opened_at IS NOT NULL
-                 ORDER BY opened_at DESC LIMIT ?1",
-            )
-            .map_err(err)?;
-        let rows = stmt
-            .query_map(params![limit], row_to_document)
-            .map_err(err)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(err)?;
+    pub fn list_recent(&self, workspace_id: Option<i64>, limit: i64) -> Result<Vec<DocumentDto>, String> {
+        let mut stmt = if workspace_id.is_some() {
+            self.conn
+                .prepare(
+                    "SELECT id, workspace_id, path, title, file_size, favorite, source, created_at, opened_at
+                     FROM documents WHERE opened_at IS NOT NULL AND workspace_id = ?1
+                     ORDER BY opened_at DESC LIMIT ?2",
+                )
+                .map_err(err)?
+        } else {
+            self.conn
+                .prepare(
+                    "SELECT id, workspace_id, path, title, file_size, favorite, source, created_at, opened_at
+                     FROM documents WHERE opened_at IS NOT NULL
+                     ORDER BY opened_at DESC LIMIT ?1",
+                )
+                .map_err(err)?
+        };
+        let rows = match workspace_id {
+            Some(ws_id) => stmt
+                .query_map(params![ws_id, limit], row_to_document)
+                .map_err(err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(err)?,
+            None => stmt
+                .query_map(params![limit], row_to_document)
+                .map_err(err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(err)?,
+        };
         Ok(rows)
     }
 
@@ -548,7 +564,7 @@ impl WorkspaceDb {
             .prepare(
                 "SELECT d.id, d.workspace_id, d.path, d.title, d.file_size,
                         d.favorite, d.source, d.created_at, d.opened_at,
-                        snippet(documents_fts, 1, '<mark>', '</mark>', '…', 24)
+                        snippet(documents_fts, -1, '<mark>', '</mark>', '…', 24)
                  FROM documents_fts
                  JOIN documents d ON d.id = documents_fts.rowid
                  WHERE documents_fts MATCH ?1 AND d.workspace_id = ?2
@@ -680,7 +696,7 @@ impl WorkspaceDb {
         Ok(())
     }
 
-    /// Return the id of an existing non-terminal task for the same source path,
+/// Return the id of an existing non-terminal task for the same source path,
     /// if one exists. Used to deduplicate the batch queue so a file dropped
     /// multiple times (or duplicate drag-drop events) cannot create an endless
     /// stream of identical tasks.
@@ -701,6 +717,27 @@ impl WorkspaceDb {
             .optional()
             .map_err(err)?;
         Ok(id)
+    }
+
+    /// On startup, mark any stale `Processing` tasks as `Failed` — they
+    /// were left behind by a previous session that was killed or crashed.
+    pub fn reconcile_stale_tasks(&self) -> Result<u64, String> {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let count = self
+            .conn
+            .execute(
+                "UPDATE batch_tasks
+                 SET status = 'Failed',
+                     error = '应用上次关闭时任务未完成',
+                     completed_at = ?1
+                 WHERE status = 'Processing'",
+                rusqlite::params![now],
+            )
+            .map_err(err)?;
+        Ok(count as u64)
     }
 
     pub fn get_batch_summary(&self) -> Result<BatchSummaryDto, String> {
@@ -1004,7 +1041,17 @@ fn strip_frontmatter(content: &str) -> &str {
         return content;
     };
     match rest.find("\n---").or_else(|| rest.find("\r\n---")) {
-        Some(end) => &rest[end..],
+        Some(end) => {
+            // Skip past the closing `---\n` or `---\r\n` delimiter.
+            let skip = if rest[end..].starts_with("\n---\n") {
+                5
+            } else if rest[end..].starts_with("\n---\r\n") {
+                6
+            } else {
+                4
+            };
+            &rest[end + skip..]
+        }
         None => content,
     }
 }
@@ -1113,6 +1160,12 @@ pub fn db(app: &tauri::AppHandle) -> Result<WorkspaceDbHandle<'static>, String> 
     Ok(WorkspaceDbHandle { guard })
 }
 
+/// Mark stale `Processing` batch tasks from a previous session as `Failed`.
+/// Call this once during app startup, after the DB is first opened.
+pub fn reconcile_stale_batch_tasks(app: &tauri::AppHandle) -> Result<u64, String> {
+    db(app)?.reconcile_stale_tasks()
+}
+
 static GLOBAL_DB: OnceLock<Mutex<Option<WorkspaceDb>>> = OnceLock::new();
 
 #[cfg(test)]
@@ -1184,7 +1237,7 @@ mod tests {
         let favs = db.list_favorites(ws.id).unwrap();
         assert_eq!(favs.len(), 1);
         db.record_open(hits[0].document.id).unwrap();
-        let recent = db.list_recent(10).unwrap();
+        let recent = db.list_recent(Some(ws.id), 10).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, hits[0].document.id);
 

@@ -25,7 +25,7 @@ interface BatchTaskPanelProps {
 
 export function BatchTaskPanel({ open, onClose }: BatchTaskPanelProps) {
   const { t } = useI18n();
-  const { tasks, summary, start, loading, refreshTasks, refreshSummary, listenForEvents } = useBatchStore();
+  const { tasks, summary, start, loading, refreshTasks, refreshSummary } = useBatchStore();
   const [filter, setFilter] = useState<string>("all");
 
   useEffect(() => {
@@ -34,14 +34,6 @@ export function BatchTaskPanel({ open, onClose }: BatchTaskPanelProps) {
       refreshSummary();
     }
   }, [open, refreshTasks, refreshSummary]);
-
-  useEffect(() => {
-    let cleanup: (() => void) | null = null;
-    if (open) {
-      listenForEvents().then((fn) => { cleanup = fn; });
-    }
-    return () => { cleanup?.(); };
-  }, [open, listenForEvents]);
 
   const filteredTasks = filter === "all"
     ? tasks

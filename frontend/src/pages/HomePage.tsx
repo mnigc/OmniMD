@@ -27,7 +27,6 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { useBatchStore } from "../store/useBatchStore";
 import type { ConversionTask } from "../types";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { useModelStore } from "../store/useModelStore";
 import { showToast } from "../lib/toast";
 import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
@@ -48,19 +47,10 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip";
 
-const CLOUD_EXTENSIONS = [
-  "pdf", "docx", "pptx", "xlsx",
-  "doc", "ppt", "xls",
-  "png", "jpg", "jpeg", "jp2", "webp", "gif", "bmp", "tiff", "tif",
-  "epub", "csv", "txt", "html", "htm", "md", "markdown",
-  "rtf", "odt", "ods", "odp",
-];
-
 export function HomePage() {
   const { t } = useI18n();
   const { tasks, summary, start, loading, cancelAll, retryFailed, clearDone, enqueue, setPanelOpen } = useBatchStore();
   const { outputMode, defaultOutputDir, allowOnline, parseQuality } = useSettingsStore();
-  const { engineMode } = useModelStore();
 
   const [outputDir, setOutputDir] = useState(defaultOutputDir);
   const [outputLocationMode, setOutputLocationMode] = useState<"sourceDir" | "custom">("sourceDir");
@@ -106,37 +96,7 @@ export function HomePage() {
   const handleFiles = useCallback(
     async (paths: string[]) => {
       if (paths.length === 0) return;
-      let files = paths;
-
-      if (engineMode === "cloud") {
-        const skipped: string[] = [];
-        const kept: string[] = [];
-        for (const path of paths) {
-          const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-          const dot = path.lastIndexOf(".");
-          const ext = dot > slash ? path.slice(dot + 1).toLowerCase() : "";
-          if (ext && !CLOUD_EXTENSIONS.includes(ext)) {
-            skipped.push(path);
-          } else {
-            kept.push(path);
-          }
-        }
-        files = kept;
-        if (skipped.length > 0) {
-          const names = skipped
-            .map((s) => s.split(/[\\/]/).pop() || s)
-            .join(", ");
-          showToast(
-            t("dropzone.cloudSkipToast")
-              .replace("{n}", String(skipped.length))
-              .replace("{files}", names),
-            4000
-          );
-        }
-      }
-
-      if (files.length === 0) return;
-      // Skip files that are already queued/pending so a single drop can never
+// Skip files that are already queued/pending so a single drop can never
       // produce duplicate tasks.
       const active = new Set(
         useBatchStore
@@ -147,7 +107,7 @@ export function HomePage() {
           .map((t) => t.sourcePath)
       );
       // Collect all enqueue calls first, then batch refresh
-      for (const path of files) {
+      for (const path of paths) {
         if (active.has(path)) continue;
         active.add(path);
         const dir = inferOutputDir(path);
@@ -164,7 +124,7 @@ export function HomePage() {
       await useBatchStore.getState().refreshTasks();
       await useBatchStore.getState().refreshSummary();
     },
-    [inferOutputDir, outputMode, parseQuality, enqueue, engineMode, t]
+[inferOutputDir, outputMode, parseQuality, enqueue, t]
   );
 
   const addInputPaths = useCallback(async (paths: string[]) => {
@@ -226,7 +186,7 @@ export function HomePage() {
     }
   }, [urlInput, outputMode, parseQuality, inferOutputDir, allowOnline, enqueue, t]);
 
-  const previewTasks = [...tasks]
+const previewTasks = [...tasks]
     .sort((a, b) => {
       const rank = (s: string) => (s === "Processing" ? 0 : s === "Pending" ? 1 : s === "Failed" ? 3 : 2);
       return rank(a.status) - rank(b.status);

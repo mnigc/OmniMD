@@ -15,9 +15,9 @@
     subtitle: "PDF · Word · PowerPoint · Excel · EPUB · HTML · URL",
     sellingPoints: {
       local: "Local processing",
+      privacy: "Privacy first",
       free: "Completely free",
       batch: "Batch conversion",
-      quality: "Preserves tables, images & links",
     },
     outputDir: "Output directory",
     outputDirPlaceholder: "Output directory (e.g. /home/user/output)",
@@ -125,12 +125,9 @@
     selected: "selected",
     files: "files",
     folderDetected: "Folder detected",
-    cloudLimits: "Cloud limits: ≤10MB per file · ≤20 pages · PDF/Images/Docx/PPTx/Xlsx · Markdown only",
     localLimits: "Local limits: ≤200MB per file · ≤200 pages · PDF/Images/Word/PPT/Excel",
     disabledHint:
-      "Base model not downloaded — local parsing unavailable. Download it or enable cloud parsing temporarily.",
-    cloudSkipToast:
-      "Cloud parsing skipped {n} unsupported file(s): {files}. Cloud only supports PDF/Images/Docx/PPTx/Xlsx",
+      "Base model not downloaded — local parsing unavailable. Download the model first.",
   },
   taskStatus: {
     pending: "Pending",
@@ -268,10 +265,8 @@
   banner: {
     text: "Base model not downloaded — local parsing unavailable",
     download: "Download Offline Model (1.8GB)",
-    useCloud: "Use Cloud",
     downloading: "Downloading offline model…",
     cancel: "Cancel Download",
-    cloudMode: "Cloud parsing",
   },
   model: {
     title: "Model Management",
@@ -305,7 +300,5 @@
     gpuOptional: "GPU Optional",
     cpuSupported: "CPU-only supported",
     cpuNotSupported: "Dedicated GPU required",
-    cloudToggle: "Cloud parsing",
-    cloudToggleHint: "≤10MB, ≤20 pages, no model download needed, requires network",
   },
 } as const;

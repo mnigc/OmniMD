@@ -82,7 +82,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
     set((state) => {
       const next = { ...state, ...partial };
       saveSettings(next);
-      return partial;
+      return next;
     });
   };
 

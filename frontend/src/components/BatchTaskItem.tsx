@@ -33,7 +33,7 @@ const statusKey: Record<string, string> = {
 
 export function BatchTaskItem({ task }: BatchTaskItemProps) {
   const { t } = useI18n();
-  const { pauseTask, resumeTask, cancelTask, retryFailed } = useBatchStore();
+  const { pauseTask, resumeTask, cancelTask, retryTask } = useBatchStore();
 
   const isUrl = task.sourcePath.startsWith("http://") || task.sourcePath.startsWith("https://");
   const fileName = isUrl
@@ -121,7 +121,7 @@ export function BatchTaskItem({ task }: BatchTaskItemProps) {
         {task.status === "Failed" && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => retryFailed()}>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => retryTask(task.id)}>
                 <RotateCcw size={14} />
               </Button>
             </TooltipTrigger>
