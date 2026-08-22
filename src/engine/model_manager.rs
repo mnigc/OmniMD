@@ -82,6 +82,54 @@ pub fn is_bundled_python_ready() -> bool {
     bundled_python_exe().exists()
 }
 
+/// Resolve the Windows x86_64 `install_only` tarball URL for Python 3.12.
+///
+/// Tries the pinned release asset first, then falls back to the GitHub API so a
+/// re-tagged or re-numbered release doesn't permanently break first-launch setup.
+async fn resolve_python_build_standalone_url() -> String {
+    let pinned = "https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.12.4+20240713-x86_64-pc-windows-msvc-install_only.tar.gz";
+    let client = reqwest::Client::builder()
+        .user_agent("OmniMD/0.1.0")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .ok();
+    let client = match client {
+        Some(c) => c,
+        None => return pinned.to_string(),
+    };
+
+    // If the pinned URL is reachable, use it.
+    if let Ok(resp) = client.head(pinned).send().await {
+        if resp.status().is_success() {
+            return pinned.to_string();
+        }
+    }
+
+    // Fallback: ask the GitHub API for the matching asset.
+    if let Ok(resp) = client
+        .get("https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/20240713")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+    {
+        if let Ok(text) = resp.text().await {
+            const SUFFIX: &str = "-x86_64-pc-windows-msvc-install_only.tar.gz";
+            if let Some(pos) = text.find(SUFFIX) {
+                let end = pos + SUFFIX.len();
+                if let Some(start) = text[..pos].rfind("cpython-3.12.") {
+                    let name = &text[start..end];
+                    return format!(
+                        "https://github.com/astral-sh/python-build-standalone/releases/download/20240713/{}",
+                        name
+                    );
+                }
+            }
+        }
+    }
+
+    pinned.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HardwareRequirements {
@@ -483,18 +531,39 @@ impl ModelManager {
     }
 
     /// Download and set up a portable Python runtime with mineru-api installed.
+    ///
+    /// When a bundled Python (shipped inside the installer) already contains
+    /// `mineru`, this is a no-op that emits a `completed` event so the UI can
+    /// reflect readiness without any network access. The runtime download path
+    /// remains as a fallback for dev builds / portable zips without the bundle.
     pub async fn setup_python_environment(app: &tauri::AppHandle) -> Result<(), String> {
         let python_dir = python_dir();
         if python_dir.join("python.exe").exists() {
-            // Already set up — verify mineru-api is installed.
+            // Already set up — verify the *pinned* mineru version is present.
+            // A newer MinerU (post-split) is intentionally rejected because it
+            // removes `torch` from the base package and changes the engine/API
+            // our conversion code was verified against (3.4.5).
             let status = Self::run_pip_list(&python_dir).await?;
-            if status.contains("mineru") {
+            if status.contains("mineru") && status.contains("3.4.5") {
+                let _ = app.emit(
+                    "python-setup-progress",
+                    PythonSetupProgressDto {
+                        stage: "completed".to_string(),
+                        progress: 1.0,
+                        detail: "Python 运行环境已就绪".to_string(),
+                    },
+                );
                 return Ok(());
             }
+            // Interpreter exists but the pinned mineru is missing/wrong version:
+            // install the pinned version in place (this also downgrades a newer
+            // install) instead of re-downloading the whole interpreter.
+            Self::install_mineru(&python_dir, app)?;
+            return Ok(());
         }
 
         // 1. Download python-build-standalone.
-        let url = "https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.12.5+20240713-x86_64-pc-windows-msvc-install_only.tar.gz";
+        let url = resolve_python_build_standalone_url().await;
         let _ = app.emit("python-setup-progress", PythonSetupProgressDto {
             stage: "downloading".to_string(),
             progress: 0.0,
@@ -593,20 +662,31 @@ impl ModelManager {
             return Err("Python 运行时解压后未找到 python.exe".to_string());
         }
 
-        // 3. Install/upgrade pip and install mineru-api.
-        let _ = app.emit("python-setup-progress", PythonSetupProgressDto {
-            stage: "installing".to_string(),
-            progress: 0.0,
-            detail: "正在安装 mineru-api…".to_string(),
-        });
+        // 3. Install/upgrade pip and install mineru-api into the interpreter.
+        Self::install_mineru(&python_dir, app)?;
 
-        // Run pip install mineru-api (with upgrade).
+        Ok(())
+    }
+
+    /// Install (or upgrade) `mineru` into the bundled Python interpreter and
+    /// emit progress events. Shared by the first-launch setup paths.
+    fn install_mineru(python_dir: &PathBuf, app: &tauri::AppHandle) -> Result<(), String> {
+        let _ = app.emit(
+            "python-setup-progress",
+            PythonSetupProgressDto {
+                stage: "installing".to_string(),
+                progress: 0.0,
+                detail: "正在安装 mineru-api…".to_string(),
+            },
+        );
+
+        let python_exe = python_dir.join("python.exe");
         let output = std::process::Command::new(&python_exe)
             .arg("-m")
             .arg("pip")
             .arg("install")
             .arg("--upgrade")
-            .arg("mineru")
+            .arg("mineru==3.4.5")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
@@ -617,11 +697,14 @@ impl ModelManager {
             return Err(format!("安装 mineru-api 失败: {}", stderr));
         }
 
-        let _ = app.emit("python-setup-progress", PythonSetupProgressDto {
-            stage: "completed".to_string(),
-            progress: 1.0,
-            detail: "Python 运行时安装完成".to_string(),
-        });
+        let _ = app.emit(
+            "python-setup-progress",
+            PythonSetupProgressDto {
+                stage: "completed".to_string(),
+                progress: 1.0,
+                detail: "Python 运行时安装完成".to_string(),
+            },
+        );
 
         Ok(())
     }

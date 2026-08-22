@@ -49,7 +49,7 @@ import {
 
 export function HomePage() {
   const { t } = useI18n();
-  const { tasks, summary, start, loading, cancelAll, retryFailed, clearDone, enqueue, setPanelOpen } = useBatchStore();
+  const { tasks, start, loading, cancelAll, retryFailed, clearDone, enqueue, setPanelOpen } = useBatchStore();
   const { outputMode, defaultOutputDir, allowOnline, parseQuality } = useSettingsStore();
 
   const [outputDir, setOutputDir] = useState(defaultOutputDir);
@@ -78,8 +78,6 @@ export function HomePage() {
       setOutputDir(defaultOutputDir);
   }, [defaultOutputDir, outputLocationMode]);
 
-  // Load any tasks persisted from a previous session so the queue is not
-  // empty on first paint.
   useEffect(() => {
     useBatchStore.getState().refreshTasks();
     useBatchStore.getState().refreshSummary();
@@ -96,8 +94,6 @@ export function HomePage() {
   const handleFiles = useCallback(
     async (paths: string[]) => {
       if (paths.length === 0) return;
-// Skip files that are already queued/pending so a single drop can never
-      // produce duplicate tasks.
       const active = new Set(
         useBatchStore
           .getState()
@@ -106,7 +102,6 @@ export function HomePage() {
           )
           .map((t) => t.sourcePath)
       );
-      // Collect all enqueue calls first, then batch refresh
       for (const path of paths) {
         if (active.has(path)) continue;
         active.add(path);
@@ -120,7 +115,6 @@ export function HomePage() {
           showToast(t("toast.filePickFailed"), 3000);
         }
       }
-      // Single batched refresh after all enqueues
       await useBatchStore.getState().refreshTasks();
       await useBatchStore.getState().refreshSummary();
     },
@@ -186,197 +180,198 @@ export function HomePage() {
     }
   }, [urlInput, outputMode, parseQuality, inferOutputDir, allowOnline, enqueue, t]);
 
-const previewTasks = [...tasks]
+  const previewTasks = [...tasks]
     .sort((a, b) => {
       const rank = (s: string) => (s === "Processing" ? 0 : s === "Pending" ? 1 : s === "Failed" ? 3 : 2);
       return rank(a.status) - rank(b.status);
     })
-    .slice(0, 5);
+    .slice(0, 8);
   const totalTasks = tasks.length;
   const pendingCount = tasks.filter((t) => t.status === "Pending").length;
   const processingCount = tasks.filter((t) => t.status === "Processing").length;
   const completedCount = tasks.filter((t) => t.status === "Completed").length;
   const failedCount = tasks.filter((t) => t.status === "Failed").length;
-  const hasTerminal = completedCount + failedCount > 0;
+
+  const StatusChip = ({ icon: Icon, count, label, color }: {
+    icon: typeof Loader2;
+    count: number;
+    label: string;
+    color: string;
+  }) => (
+    <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-muted/40 border border-border/60">
+      <Icon size={10} className={color} />
+      <span className="text-xs font-medium tabular-nums">{count}</span>
+      <span className="text-[10px] text-muted-foreground">{label}</span>
+    </div>
+  );
 
   return (
     <div className="h-full flex flex-col">
       <div className="flex-1 p-6 overflow-auto">
-        <div className="max-w-5xl mx-auto w-full flex flex-col gap-6">
-          <div className="text-center mb-2">
+        <div className="max-w-7xl mx-auto w-full flex flex-col gap-5">
+          <div className="text-center">
             <h1 className="text-xl font-semibold tracking-tight">{t("home.title")}</h1>
-            <p className="text-muted-foreground mt-1.5 text-sm">{t("home.subtitle")}</p>
-            <SellingPoints className="mt-4" />
+            <p className="text-muted-foreground mt-1 text-sm">{t("home.subtitle")}</p>
+            <SellingPoints className="mt-3" />
           </div>
 
-          <DropZone onFiles={addInputPaths} onFolder={handleFolder} formats={supportedFormats} />
-          <OutputModeSelector />
+          <div className="grid grid-cols-12 gap-5 flex-1 min-h-0">
+            <div className="col-span-7 flex flex-col gap-4 min-h-0">
+              <DropZone onFiles={addInputPaths} onFolder={handleFolder} formats={supportedFormats} />
 
-          <div className="flex flex-col gap-2">
-            <Label className="text-xs text-muted-foreground">{t("home.outputLocation")}</Label>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setOutputLocationMode("sourceDir")}
-                className={cn(
-                  "flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium whitespace-nowrap transition-all",
-                  outputLocationMode === "sourceDir"
-                    ? "border-primary bg-primary/5 text-primary"
-                    : "border-border bg-muted/30 text-muted-foreground hover:border-primary/40 hover:bg-muted/50"
+              <OutputModeSelector />
+
+              <div className="flex flex-col gap-2">
+                <Label className="text-xs text-muted-foreground">{t("home.outputLocation")}</Label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setOutputLocationMode("sourceDir")}
+                    className={cn(
+                      "flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs font-medium whitespace-nowrap transition-all",
+                      outputLocationMode === "sourceDir"
+                        ? "border-primary bg-primary/5 text-primary shadow-sm"
+                        : "border-border bg-muted/30 text-muted-foreground hover:border-primary/40 hover:bg-muted/50"
+                    )}
+                  >
+                    <Inbox size={13} />
+                    {t("home.outputInSourceDir")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOutputLocationMode("custom")}
+                    className={cn(
+                      "flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs font-medium whitespace-nowrap transition-all",
+                      outputLocationMode === "custom"
+                        ? "border-primary bg-primary/5 text-primary shadow-sm"
+                        : "border-border bg-muted/30 text-muted-foreground hover:border-primary/40 hover:bg-muted/50"
+                    )}
+                  >
+                    <FolderOpen size={13} />
+                    {t("home.outputCustom")}
+                  </button>
+                  {outputLocationMode === "custom" && (
+                    <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                      <Input
+                        type="text"
+                        value={outputDir}
+                        onChange={(e) => setOutputDir(e.target.value)}
+                        placeholder={t("home.outputDirPlaceholder")}
+                        className="flex-1 min-w-0 h-8 text-xs"
+                      />
+                      <Button variant="outline" size="sm" onClick={handleBrowseOutputDir} className="h-8">
+                        <FolderOpen size={13} />
+                        {t("home.browse")}
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={handleOpenOutputDir} disabled={!outputDir} title={t("home.openHint")} className="h-8">
+                        <Folder size={13} />
+                        {t("home.open")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="relative w-full max-w-md">
+                <Link size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                <Input
+                  type="text"
+                  placeholder={allowOnline ? t("home.pasteUrl") : t("home.pasteUrlDisabled")}
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleUrlSubmit(); }}
+                  disabled={downloading || !allowOnline}
+                  className="pl-8 text-xs h-8"
+                />
+                {urlError && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="absolute -bottom-5 left-2.5 text-xs text-destructive truncate max-w-full cursor-help">{urlError}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs p-2 text-xs">
+                      <p className="whitespace-pre-wrap break-words">{urlError}</p>
+                    </TooltipContent>
+                  </Tooltip>
                 )}
-              >
-                <Inbox size={14} />
-                {t("home.outputInSourceDir")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setOutputLocationMode("custom")}
-                className={cn(
-                  "flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium whitespace-nowrap transition-all",
-                  outputLocationMode === "custom"
-                    ? "border-primary bg-primary/5 text-primary"
-                    : "border-border bg-muted/30 text-muted-foreground hover:border-primary/40 hover:bg-muted/50"
-                )}
-              >
-                <FolderOpen size={14} />
-                {t("home.outputCustom")}
-              </button>
-              {outputLocationMode === "custom" && (
-                <>
-                  <Input
-                    type="text"
-                    value={outputDir}
-                    onChange={(e) => setOutputDir(e.target.value)}
-                    placeholder={t("home.outputDirPlaceholder")}
-                    className="flex-1 min-w-0 h-9"
-                  />
-                  <Button variant="outline" onClick={handleBrowseOutputDir}>
-                    <FolderOpen size={14} />
-                    {t("home.browse")}
-                  </Button>
-                  <Button variant="outline" onClick={handleOpenOutputDir} disabled={!outputDir} title={t("home.openHint")}>
-                    <Folder size={14} />
-                    {t("home.open")}
-                  </Button>
-                </>
+              </div>
+              {urlInput && (
+                <p className="text-xs text-muted-foreground -mt-1">{t("home.urlPrivacyNote")}</p>
               )}
+
+              <div className="mt-auto pt-2 flex items-center gap-2 flex-wrap">
+                <StatusChip icon={Loader2} count={processingCount} label={t("taskStatus.processing")} color="text-primary animate-spin" />
+                <StatusChip icon={CheckCircle2} count={completedCount} label={t("taskStatus.completed")} color="text-success" />
+                <StatusChip icon={XCircle} count={failedCount} label={t("taskStatus.failed")} color="text-destructive" />
+                <StatusChip icon={AlertTriangle} count={pendingCount} label={t("taskStatus.pending")} color="text-warning" />
+              </div>
+            </div>
+
+            <div className="col-span-5 flex flex-col min-h-0">
+              <Card className="flex flex-col overflow-hidden flex-1 min-h-0">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm">
+                      {t("home.sessionTitle")}{" "}
+                      <span className="text-muted-foreground tabular-nums">({totalTasks})</span>
+                    </CardTitle>
+                    <div className="flex items-center gap-1">
+                      {tasks.some((t) => t.status === "Processing") ? (
+                        <Button variant="destructive" size="sm" onClick={async () => {
+                          if (await confirm('确定要取消所有进行中的转换吗？', { title: '取消转换', kind: 'warning' })) {
+                            cancelAll();
+                          }
+                        }} disabled={loading} className="h-7 text-xs">
+                          <X size={12} />
+                          {t("home.cancel")}
+                        </Button>
+                      ) : (
+                        <Button size="sm" onClick={start} disabled={pendingCount === 0} className="h-7 text-xs">
+                          <Play size={12} />
+                          {t("home.startConversion")}
+                        </Button>
+                      )}
+                      {failedCount > 0 && !tasks.some((t) => t.status === "Processing") && (
+                        <Button variant="outline" size="sm" onClick={retryFailed} className="h-7 text-xs">
+                          <RotateCcw size={12} />
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" onClick={clearDone} disabled={totalTasks === 0 || tasks.some((t) => t.status === "Processing")} className="h-7 text-xs">
+                        <Trash2 size={12} />
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="flex-1 min-h-0 p-0">
+                  {totalTasks === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-center h-full">
+                      <Inbox className="mx-auto mb-3 text-muted-foreground/40" size={36} />
+                      <p className="text-sm font-medium">{t("home.noFilesInSession")}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {t("dropzone.dropFilesOrFolder")}
+                      </p>
+                    </div>
+                  ) : (
+                    <ScrollArea className="h-full max-h-[420px] overflow-y-auto">
+                      <div className="space-y-1.5 p-3 pt-1">
+                        {previewTasks.map((tsk) => (
+                          <TaskItem key={tsk.id} task={tsk as any} compact />
+                        ))}
+                        {totalTasks > 8 && (
+                          <button
+                            onClick={() => setPanelOpen(true)}
+                            className="w-full text-center text-xs text-primary py-2 hover:underline transition-colors"
+                          >
+                            {t("home.viewAll")} ({totalTasks - 8} more)
+                          </button>
+                        )}
+                      </div>
+                    </ScrollArea>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           </div>
-
-          <div className="relative w-full max-w-52">
-            <Link size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-            <Input
-              type="text"
-              placeholder={allowOnline ? t("home.pasteUrl") : t("home.pasteUrlDisabled")}
-              value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleUrlSubmit(); }}
-              disabled={downloading || !allowOnline}
-              className="pl-8 text-xs"
-            />
-            {urlError && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="absolute -bottom-5 left-2.5 text-xs text-destructive truncate max-w-full cursor-help">{urlError}</span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs p-2 text-xs">
-                  <p className="whitespace-pre-wrap break-words">{urlError}</p>
-                </TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-          {urlInput && (
-            <p className="text-xs text-muted-foreground -mt-2">{t("home.urlPrivacyNote")}</p>
-          )}
-
-          <Card className="flex flex-col overflow-hidden">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm">
-                  {t("home.sessionTitle")}{" "}
-                  <span className="text-muted-foreground tabular-nums">({totalTasks})</span>
-                </CardTitle>
-              </div>
-            </CardHeader>
-
-            <CardContent className="flex-1 min-h-0 p-0">
-              {totalTasks === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <Inbox className="mx-auto mb-3 text-muted-foreground opacity-30" size={32} />
-                  <p className="text-sm font-medium">{t("home.noFilesInSession")}</p>
-                </div>
-              ) : (
-                <ScrollArea className="min-h-[80px] max-h-[240px] overflow-y-auto">
-                  <div className="space-y-2 p-4 pt-1">
-                    {previewTasks.map((tsk) => (
-                      <TaskItem key={tsk.id} task={tsk as any} compact />
-                    ))}
-                    {totalTasks > 5 && (
-                      <button
-                        onClick={() => setPanelOpen(true)}
-                        className="w-full text-center text-xs text-primary py-2 hover:underline"
-                      >
-                        {t("home.viewAll")} ({totalTasks - 5} more)
-                      </button>
-                    )}
-                  </div>
-                </ScrollArea>
-              )}
-            </CardContent>
-
-            <CardFooter className="border-t border-border p-4 flex flex-col gap-3">
-              <div className="flex items-center gap-2 w-full">
-                {tasks.some((t) => t.status === "Processing") ? (
-                  <Button variant="destructive" onClick={async () => {
-                    if (await confirm('确定要取消所有进行中的转换吗？', { title: '取消转换', kind: 'warning' })) {
-                      cancelAll();
-                    }
-                  }} disabled={loading}>
-                    <X size={16} />
-                    {t("home.cancel")}
-                  </Button>
-                ) : (
-                  <Button onClick={start} disabled={pendingCount === 0}>
-                    <Play size={16} />
-                    {t("home.startConversion")}
-                  </Button>
-                )}
-                {failedCount > 0 && !tasks.some((t) => t.status === "Processing") && (
-                  <Button variant="outline" onClick={retryFailed} className="text-destructive hover:text-destructive">
-                    <RotateCcw size={16} />
-                    {t("batch.retryFailed")}
-                  </Button>
-                )}
-                <Button variant="outline" onClick={clearDone} disabled={totalTasks === 0 || tasks.some((t) => t.status === "Processing")}>
-                  <Trash2 size={16} />
-                  {t("home.clearSession")}
-                </Button>
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5 rounded-md bg-background px-2 py-1 border border-border">
-                  <Loader2 size={12} className="animate-spin text-primary" />
-                  <span className="text-xs font-medium tabular-nums">{processingCount}</span>
-                  <span className="text-[11px] text-muted-foreground">{t("taskStatus.processing")}</span>
-                </div>
-                <div className="flex items-center gap-1.5 rounded-md bg-background px-2 py-1 border border-border">
-                  <CheckCircle2 size={12} className="text-success" />
-                  <span className="text-xs font-medium tabular-nums">{completedCount}</span>
-                  <span className="text-[11px] text-muted-foreground">{t("taskStatus.completed")}</span>
-                </div>
-                <div className="flex items-center gap-1.5 rounded-md bg-background px-2 py-1 border border-border">
-                  <XCircle size={12} className="text-destructive" />
-                  <span className="text-xs font-medium tabular-nums">{failedCount}</span>
-                  <span className="text-[11px] text-muted-foreground">{t("taskStatus.failed")}</span>
-                </div>
-                <div className="flex items-center gap-1.5 rounded-md bg-background px-2 py-1 border border-border">
-                  <AlertTriangle size={12} className="text-warning" />
-                  <span className="text-xs font-medium tabular-nums">{pendingCount}</span>
-                  <span className="text-[11px] text-muted-foreground">{t("taskStatus.pending")}</span>
-                </div>
-              </div>
-            </CardFooter>
-          </Card>
         </div>
       </div>
     </div>

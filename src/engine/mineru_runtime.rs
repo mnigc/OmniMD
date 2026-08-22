@@ -1,8 +1,7 @@
-use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tracing::{error, info, warn};
@@ -20,11 +19,16 @@ pub struct MinerURuntime {
     stopping: AtomicBool,
     pub base_url: String,
     install_dir: PathBuf,
+    /// Captures mineru-api stdout/stderr so startup failures can be reported
+    /// to the user instead of a silent 120s timeout.
+    startup_log: Arc<Mutex<String>>,
 }
 
-const HEALTH_TIMEOUT_SECS: u64 = 120;
+const HEALTH_TIMEOUT_SECS: u64 = 600;
 const START_BACKOFF_SECS: u64 = 3;
 const MAX_RESTART_ATTEMPTS: u32 = 3;
+/// Cap on captured startup log to avoid unbounded memory growth.
+const STARTUP_LOG_CAP: usize = 8192;
 
 impl MinerURuntime {
     pub fn new(port: u16, install_dir: PathBuf) -> Self {
@@ -34,6 +38,7 @@ impl MinerURuntime {
             stopping: AtomicBool::new(false),
             base_url: format!("http://127.0.0.1:{}", port),
             install_dir,
+            startup_log: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -61,24 +66,31 @@ impl MinerURuntime {
 
         info!("Starting mineru-api on port {}", self.port);
 
-        // Try bundled Python first, then fall back to system PATH.
-        let bundled_py = self.install_dir.join("python").join("python.exe");
-        let (mut cmd, _args): (Command, &str) = if bundled_py.exists() {
-            info!("Using bundled Python at {}", bundled_py.display());
-            let mut c = Command::new(&bundled_py);
-            c.arg("-m").arg("mineru_api");
-            (c, bundled_py.to_str().unwrap_or("python.exe"))
+        // Prefer the bundled Python's own `mineru-api` console script. MinerU
+        // 3.4.5 ships the server as `python/Scripts/mineru-api.exe` (entry
+        // point `mineru.cli.fast_api:main`) — there is no top-level
+        // `mineru_api` module, so `python -m mineru_api` must NOT be used.
+        // Falls back to a system-installed `mineru-api` on PATH otherwise.
+        let bundled_api = self
+            .install_dir
+            .join("python")
+            .join("Scripts")
+            .join("mineru-api.exe");
+
+        let (mut cmd, cmd_name): (Command, String) = if bundled_api.exists() {
+            info!("Using bundled mineru-api: {}", bundled_api.display());
+            (
+                Command::new(&bundled_api),
+                bundled_api.to_string_lossy().to_string(),
+            )
         } else {
-            info!("Bundled Python not found, falling back to system PATH");
-            let c = Command::new("mineru-api");
-            (c, "mineru-api")
+            info!("Bundled mineru-api not found, falling back to system PATH mineru-api");
+            (Command::new("mineru-api"), "mineru-api".to_string())
         };
 
-        let cmd_name = if bundled_py.exists() {
-            bundled_py.to_string_lossy().to_string()
-        } else {
-            "mineru-api".to_string()
-        };
+        // Reset the startup log so each (re)start captures a fresh trace.
+        *self.startup_log.lock().unwrap() = String::new();
+        let log = self.startup_log.clone();
 
         let mut child = cmd
             .arg("--host")
@@ -100,38 +112,61 @@ impl MinerURuntime {
         // first one (the process) is still producing output, so we read both in
         // parallel on separate blocking threads.
         let stdout = child.stdout.take().expect("child stdout should be piped");
+        let log_stdout = log.clone();
         tokio::task::spawn_blocking(move || {
-            MinerURuntime::read_stdio(stdout, "mineru-api stdout");
+            MinerURuntime::read_stdio(stdout, "mineru-api stdout", log_stdout);
         });
         let stderr = child.stderr.take().expect("child stderr should be piped");
         tokio::task::spawn_blocking(move || {
-            MinerURuntime::read_stdio(stderr, "mineru-api stderr");
+            MinerURuntime::read_stdio(stderr, "mineru-api stderr", log);
         });
 
         *self.child.lock().unwrap() = Some(child);
         Ok(())
     }
 
-    /// Reads a std::io::Read stream line-by-line on a blocking thread and
-    /// forwards each non-empty line to the `tracing` logger. EOF or read
-    /// errors end the loop.
-    fn read_stdio<R: std::io::Read>(stream: R, stream_name: &str) {
-        let reader = std::io::BufReader::new(stream);
-        for line in reader.lines() {
-            match line {
-                Ok(l) if !l.is_empty() => {
-                    info!("[{}] {}", stream_name, l);
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    warn!("[{}] read error: {}", stream_name, e);
-                    break;
-                }
+    /// Reads a std::io::Read stream on a blocking thread, logs each complete
+    /// line, and appends the *entire* output (including a trailing partial line
+    /// that has no newline) to the shared startup log so startup failures such
+    /// as `No module named mineru_api` are never silently dropped.
+    fn read_stdio<R: std::io::Read>(mut stream: R, stream_name: &str, log: Arc<Mutex<String>>) {
+        let mut content = String::new();
+        // `read_to_string` blocks until EOF; a closed pipe (process exit) ends it.
+        if stream.read_to_string(&mut content).is_err() {
+            return;
+        }
+
+        // Log each complete line for the tracing sink.
+        for l in content.lines() {
+            if !l.is_empty() {
+                info!("[{}] {}", stream_name, l);
+            }
+        }
+
+        // Append the WHOLE output (partial last line included) to the buffer.
+        if !content.is_empty() {
+            let mut buf = log.lock().unwrap();
+            buf.push_str(stream_name);
+            buf.push_str(":\n");
+            buf.push_str(&content);
+            if !buf.ends_with('\n') {
+                buf.push('\n');
+            }
+            if buf.len() > STARTUP_LOG_CAP {
+                let drop = buf.len() - STARTUP_LOG_CAP;
+                buf.replace_range(..drop, "");
             }
         }
     }
 
-    /// Poll `GET /health` until ready or timeout.
+    /// Poll until the service is listening or timeout.
+    ///
+    /// Compatibility note: different MinerU releases expose `/health`
+    /// differently (some return 200, some 404, some don't serve it at all).
+    /// We treat *any* HTTP response on the port as "the server is up and ready
+    /// to accept tasks" rather than requiring a specific status code — a
+    /// connection that is accepted means uvicorn is serving. A transport error
+    /// (connection refused) means it is still starting (or has crashed).
     async fn wait_healthy(&self) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(HEALTH_TIMEOUT_SECS);
         let client = reqwest::Client::new();
@@ -141,23 +176,46 @@ impl MinerURuntime {
             if self.stopping.load(Ordering::Relaxed) {
                 return Err("MinerU runtime is stopping".to_string());
             }
-            // Reap a crashed child so we can detect and restart it.
+            // Reap a crashed child so we can detect and report it.
             self.reap_child();
 
+            // If the child already exited, fail fast with its captured output
+            // instead of waiting out the full timeout.
+            if self.child.lock().unwrap().is_none() {
+                // Give the reader threads a moment to flush the tail of the
+                // stream into the log buffer before we read it.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let log = self.startup_log.lock().unwrap().clone();
+                if log.trim().is_empty() {
+                    return Err(
+                        "mineru-api 启动后意外退出，且未输出任何日志（静默退出）。\
+请打开终端手动运行 `mineru-api --host 127.0.0.1 --port 18628` 查看真实报错，\
+并确认 mineru 已用 `pip install mineru` 正确安装。"
+                            .to_string(),
+                    );
+                }
+                return Err(format!(
+                    "mineru-api 启动后意外退出（可能未安装 mineru / 模块缺失 / 端口被占用）。启动日志：\n{}",
+                    log
+                ));
+            }
+
             match client.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    info!("mineru-api is healthy at {}", self.base_url);
+                // Any HTTP response means the server is listening and ready.
+                Ok(_) => {
+                    info!("mineru-api is ready at {}", self.base_url);
                     return Ok(());
                 }
-                _ => {
+                Err(_) => {
                     tokio::time::sleep(Duration::from_millis(1500)).await;
                 }
             }
         }
 
+        let log = self.startup_log.lock().unwrap().clone();
         Err(format!(
-            "MinerU 服务在 {} 秒内未就绪（可能是首次加载模型，请稍后重试）",
-            HEALTH_TIMEOUT_SECS
+            "MinerU 服务在 {} 秒内未就绪（可能是首次加载模型，请稍后重试）。启动日志：\n{}",
+            HEALTH_TIMEOUT_SECS, log
         ))
     }
 
@@ -167,10 +225,8 @@ impl MinerURuntime {
             .build()
             .unwrap_or_default();
         let url = format!("{}/health", self.base_url);
-        matches!(
-            client.get(&url).send().await,
-            Ok(resp) if resp.status().is_success()
-        )
+        // Any response (including a non-200) means the server is up.
+        client.get(&url).send().await.is_ok()
     }
 
     /// Check whether the child process has exited; if so, remove it from our

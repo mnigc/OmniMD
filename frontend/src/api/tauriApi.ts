@@ -304,3 +304,8 @@ export async function checkPythonEnvironment(): Promise<boolean> {
 export async function setupPythonEnvironment(): Promise<void> {
   return invoke<void>("setup_python_environment");
 }
+
+/** One-time, fully automatic environment preparation (Python + model + MinerU). */
+export async function prepareEnvironment(): Promise<void> {
+  return invoke<void>("prepare_environment");
+}

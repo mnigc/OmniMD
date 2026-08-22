@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::fs;
+use std::io;
 use std::time::Duration;
 
 use db::{
@@ -73,6 +74,17 @@ pub struct ErrorDto {
     pub code: String,
     pub message: String,
     pub retryable: bool,
+}
+
+/// Progress of the one-time environment preparation (Python + model + MinerU).
+/// Emitted on `env-prepare-progress` while `prepare_environment` runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvPrepareProgressDto {
+    /// One of: `python` | `model` | `mineru` | `done` | `error`.
+    pub stage: String,
+    pub progress: f32,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -477,6 +489,59 @@ async fn mineru_status(app: tauri::AppHandle) -> Result<serde_json::Value, Strin
         "healthy": healthy,
         "baseUrl": runtime.base_url,
     }))
+}
+
+/// One-time environment preparation that makes the app usable out of the box:
+/// ensure the Python runtime (bundled or auto-installed), download the default
+/// pipeline model if missing, and start the MinerU engine. Runs in the
+/// background and reports progress via `env-prepare-progress`; the frontend
+/// never needs to prompt the user to click "install" or "download".
+#[tauri::command]
+async fn prepare_environment(app: tauri::AppHandle) -> Result<(), String> {
+    let runtime = get_state(&app)?.mineru_runtime();
+    let model_mgr = ModelManager::new();
+    let app_for_task = app.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let emit = |stage: &str, progress: f32, detail: &str| {
+            let _ = app_for_task.emit(
+                "env-prepare-progress",
+                EnvPrepareProgressDto {
+                    stage: stage.to_string(),
+                    progress,
+                    detail: detail.to_string(),
+                },
+            );
+        };
+
+        emit("python", 0.02, "正在准备 Python 运行环境…");
+        if let Err(e) = ModelManager::setup_python_environment(&app_for_task).await {
+            emit("error", 0.0, &format!("Python 环境准备失败：{e}"));
+            return;
+        }
+
+        emit("model", 0.1, "正在准备解析模型…");
+        let needs_model = match model_mgr.get_model_status("pipeline").await {
+            Ok(m) => m.status != "downloaded",
+            Err(_) => true,
+        };
+        if needs_model {
+            if let Err(e) = model_mgr.download_model(&app_for_task, "pipeline").await {
+                emit("error", 0.0, &format!("模型下载失败：{e}"));
+                return;
+            }
+        }
+
+        emit("mineru", 0.97, "正在启动 MinerU 引擎…");
+        if let Err(e) = runtime.ensure_running().await {
+            emit("error", 0.0, &format!("MinerU 启动失败：{e}"));
+            return;
+        }
+
+        emit("done", 1.0, "环境准备完成");
+    });
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -929,7 +994,81 @@ async fn check_model_update(app: tauri::AppHandle, model_name: String) -> Result
     state.model_manager.check_update(&model_name).await
 }
 
+/// Initialize a tracing subscriber that writes to a log file under the
+/// user-writable AppData/Roaming/OmniMD/logs directory (falling back to stdout
+/// if that file cannot be created). This makes runtime diagnostics — including
+/// the captured `mineru-api` stdout/stderr — inspectable instead of being
+/// silently discarded in a bundled build.
+fn init_logging() {
+    use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
+
+    let log_dir = std::env::var("APPDATA")
+        .map(|p| std::path::PathBuf::from(p).join("OmniMD").join("logs"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("omnimd_logs"));
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file = std::fs::File::create(log_dir.join("omnimd.log")).ok();
+
+    // BoxMakeWriter unifies the two writer types so both match arms share one
+    // concrete type.
+    use tracing_subscriber::fmt::writer::BoxMakeWriter;
+    let writer: BoxMakeWriter = match file {
+        Some(f) => BoxMakeWriter::new(f),
+        None => BoxMakeWriter::new(io::stdout),
+    };
+
+    let layer = fmt::layer()
+        .with_writer(writer)
+        .with_ansi(false)
+        .with_filter(LevelFilter::INFO);
+
+    let _ = tracing_subscriber::registry().with(layer).try_init();
+}
+
+/// Capture panics (which otherwise only go to stderr and are discarded in a
+/// bundled app) into a dedicated log file so a hard crash is diagnosable.
+fn install_panic_hook() {
+    let log_dir = std::env::var("APPDATA")
+        .map(|p| std::path::PathBuf::from(p).join("OmniMD").join("logs"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("omnimd_logs"));
+    let _ = std::fs::create_dir_all(&log_dir);
+    let panic_file = log_dir.join("omnimd.panic.log");
+    std::panic::set_hook(Box::new(move |info| {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_default();
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string payload>".to_string()
+        };
+        let msg = format!(
+            "[{}] PANIC at {}\n  message: {}\n  thread: {}\n",
+            ts,
+            loc,
+            payload,
+            std::thread::current().name().unwrap_or("unnamed")
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&panic_file)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, msg.as_bytes()));
+    }));
+}
+
 pub fn run() {
+    // Capture hard crashes before anything else.
+    install_panic_hook();
+    // Initialize logging first so all subsequent diagnostics are captured.
+    init_logging();
+
     // Clean up leftover temp download files from previous runs.
     let temp_dir = std::env::temp_dir().join("omnimd_downloads");
     if temp_dir.exists() {
@@ -1011,6 +1150,7 @@ pub fn run() {
             check_model_update,
             check_python_environment,
             setup_python_environment,
+            prepare_environment,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

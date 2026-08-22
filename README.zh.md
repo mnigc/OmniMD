@@ -68,11 +68,26 @@ pnpm tauri dev
 
 ## 📦 打包发布
 
+发布安装包前，先把**便携版 Python + mineru** 预装进包体（一次构建、用户端零配置）：
+
 ```bash
+# 1. 预装打包工具（WiX 等），避免构建时从 GitHub 下载超时
+pnpm bundle:tools
+
+# 2. 预装 Python 运行环境与 mineru 到 bundle_extras/python/
+pnpm bundle:python
+
+# 3. 打包（会自动把 bundle_extras/python 打进安装包）
 pnpm tauri build
 ```
 
-产物位于 `target/release/bundle/`，Windows 下生成 `.msi` / `.exe` 安装包。
+产物位于 `target/release/bundle/`，Windows 下生成 `.msi` 安装包。
+
+> 说明：`bundle_extras/` 由构建脚本生成（多 GB，已加入 `.gitignore`），**不提交到仓库**。普通开发（`pnpm tauri dev`）无需此步骤——缺失内置 Python 时应用会在首次启动时自动下载安装，行为与之前一致。`bundle:tools` 只需在出安装包、且本机尚未缓存 WiX 时跑一次。
+
+### 开箱即用（免手动配置）
+
+安装后应用会自动完成环境就绪：首次启动静默下载默认 pipeline 模型并拉起 MinerU 引擎，**用户无需在设置里手动安装 Python 运行环境或点击下载模型**即可直接转换文档。若首次启动无网络导致准备失败，界面会提示重试，也可在「设置 → 模型管理」导入离线模型。
 
 ## 🏗️ 项目结构
 

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "build": {
     "frontendDist": "frontend/dist",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:1421",
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build"
   },
@@ -24,7 +24,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": "msi",
+    "resources": {
+      "bundle_extras/python": "python"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser"

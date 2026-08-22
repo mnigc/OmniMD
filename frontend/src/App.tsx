@@ -50,7 +50,7 @@ export function App() {
   const [page, setPage] = useState<Page>("home");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [appVersion, setAppVersion] = useState("v0.1.0");
-const { modelReady, downloading, downloadProgress } = useModelStore();
+const { modelReady, downloading, downloadProgress, preparing, prepareError } = useModelStore();
   const batchPanelOpen = useBatchStore((s) => s.panelOpen);
   const setBatchPanelOpen = useBatchStore((s) => s.setPanelOpen);
 
@@ -137,20 +137,28 @@ const { modelReady, downloading, downloadProgress } = useModelStore();
 
   // First-launch check: whether the local pipeline model exists.
   // Also registers the model download progress listener shared with the
-  // Settings page.
+  // Settings page, and kicks off automatic environment preparation so the app
+  // is ready to use without any manual "install / download" clicks.
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let envUnlisten: (() => void) | null = null;
     (async () => {
       try {
         const store = useModelStore.getState();
         await store.refreshModelReady();
         unlisten = await store.listenForProgress();
+        envUnlisten = await store.listenForEnvPrepare();
+        // Automatically prepare Python + model + MinerU on first launch.
+        if (!useModelStore.getState().modelReady) {
+          useModelStore.getState().prepare();
+        }
       } catch {
         // Not running in Tauri
       }
     })();
     return () => {
       unlisten?.();
+      envUnlisten?.();
     };
   }, []);
 
@@ -212,14 +220,7 @@ const { modelReady, downloading, downloadProgress } = useModelStore();
   }, []);
 
   const handleDownloadModel = useCallback(async () => {
-    const store = useModelStore.getState();
-    await store.downloadModel("pipeline");
-    try {
-      await startMineru();
-    } catch {
-      // best-effort: MinerUEngine auto-starts the runtime on first convert
-    }
-    await store.refreshModelReady();
+    await useModelStore.getState().prepare();
   }, []);
 
   // Close batch panel when page changes to avoid stale event listeners
@@ -305,9 +306,11 @@ const { modelReady, downloading, downloadProgress } = useModelStore();
 
       {!modelReady && (
         <ModelBanner
+          preparing={preparing}
+          prepareError={prepareError}
           downloading={downloading}
           progress={downloadProgress.pipeline?.progress ?? 0}
-          onDownload={handleDownloadModel}
+          onRetry={handleDownloadModel}
           onCancelDownload={() => {
             useModelStore.getState().cancelDownload();
           }}
@@ -317,7 +320,8 @@ const { modelReady, downloading, downloadProgress } = useModelStore();
       <div className="flex flex-1 overflow-hidden">
         <aside
           className={cn(
-            "shrink-0 border-r border-border bg-muted/40 p-3 flex flex-col gap-1 overflow-hidden transition-all duration-250 ease-out",
+            "shrink-0 border-r border-border bg-muted/40 p-3 flex flex-col gap-1 overflow-hidden",
+            "transition-[width,padding] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]",
             sidebarOpen ? "w-52" : "w-14"
           )}
         >
@@ -370,7 +374,11 @@ const { modelReady, downloading, downloadProgress } = useModelStore();
           </div>
         </aside>
 
-        <main className="flex-1 overflow-hidden">{renderPage()}</main>
+        <main className="flex-1 overflow-hidden">
+          <div key={page} className="h-full w-full page-transition">
+            {renderPage()}
+          </div>
+        </main>
       </div>
       <BatchTaskPanel
         open={batchPanelOpen}

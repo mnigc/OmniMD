@@ -265,8 +265,12 @@
   banner: {
     text: "Base model not downloaded — local parsing unavailable",
     download: "Download Offline Model (1.8GB)",
+    prepare: "Prepare Environment",
+    preparing: "Preparing environment (first launch downloads the model)…",
     downloading: "Downloading offline model…",
     cancel: "Cancel Download",
+    error: "Environment preparation failed: ",
+    retry: "Retry",
   },
   model: {
     title: "Model Management",

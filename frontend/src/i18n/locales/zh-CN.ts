@@ -264,8 +264,12 @@ filePickFailed: "选择文件失败，请重试",
   banner: {
     text: "基础模型未下载，本地解析不可用",
     download: "下载离线模型 (1.8GB)",
+    prepare: "准备运行环境",
+    preparing: "正在准备运行环境（首次启动需下载模型）…",
     downloading: "正在下载离线模型…",
     cancel: "取消下载",
+    error: "环境准备失败：",
+    retry: "重试",
   },
   model: {
     title: "模型管理",

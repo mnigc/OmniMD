@@ -28,9 +28,9 @@ scraper = "0.22"
 # SQLite bundled: compiles SQLite from source on every platform, ships FTS5
 # out of the box (no system SQLite required on Windows).
 rusqlite = { version = "0.32", features = ["bundled"] }
+tracing-subscriber = "0.3"
 
 [dev-dependencies]
-tracing-subscriber = "0.3"
 tokio = { version = "1", features = ["full", "test-util"] }
 
 [build-dependencies]

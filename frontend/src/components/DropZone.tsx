@@ -191,31 +191,32 @@ const dropHandledNatively = useRef(false);
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       className={cn(
-        "flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-dashed transition-all duration-200",
+        "group relative flex items-center gap-4 px-5 py-4 rounded-xl border-2 border-dashed",
+        "transition-all duration-300 ease-out",
         className,
         isDragging
-          ? "border-primary bg-primary/5 shadow-lg shadow-primary/10"
+          ? "border-primary bg-primary/8 shadow-xl shadow-primary/15 scale-[1.01]"
           : disabled
-            ? "border-border bg-muted/30 opacity-60 cursor-not-allowed"
-            : "border-border bg-muted/30 hover:border-primary/50 hover:bg-muted/50"
+            ? "border-border bg-muted/20 opacity-50 cursor-not-allowed"
+            : "border-border/70 bg-muted/20 hover:border-primary/50 hover:bg-muted/40 hover:shadow-md hover:shadow-primary/5"
       )}
     >
       <div
         className={cn(
-          "p-2.5 rounded-full shrink-0 transition-colors",
+          "p-3 rounded-xl shrink-0 transition-all duration-300",
           isDragging
-            ? "bg-primary/10 text-primary"
-            : "bg-muted text-muted-foreground"
+            ? "bg-primary/15 text-primary scale-110"
+            : "bg-muted/60 text-muted-foreground group-hover:text-primary group-hover:bg-primary/10"
         )}
       >
         {isDragging ? (
           isFolderDrag ? (
-            <FolderOpen size={20} />
+            <FolderOpen size={24} />
           ) : (
-            <Upload size={20} className="animate-bounce" />
+            <Upload size={24} className="animate-bounce" />
           )
         ) : (
-          <FileUp size={20} />
+          <FileUp size={24} />
         )}
       </div>
 
@@ -229,11 +230,11 @@ const dropHandledNatively = useRef(false);
         </p>
         <p
           className={cn(
-            "text-[11px] mt-0.5",
-            disabled ? "text-destructive" : "text-muted-foreground/80"
+            "text-xs mt-1",
+            disabled ? "text-destructive" : "text-muted-foreground"
           )}
         >
-{disabled
+          {disabled
             ? t("dropzone.disabledHint")
             : t("dropzone.localLimits")}
         </p>
@@ -247,6 +248,7 @@ const dropHandledNatively = useRef(false);
             e.stopPropagation();
             openFilePicker();
           }}
+          className="transition-all duration-200"
         >
           <FileUp size={14} />
           {t("home.addFiles")}
@@ -259,6 +261,7 @@ const dropHandledNatively = useRef(false);
               e.stopPropagation();
               openFolderPicker();
             }}
+            className="transition-all duration-200"
           >
             <FolderOpen size={14} />
             {t("home.chooseFolder")}

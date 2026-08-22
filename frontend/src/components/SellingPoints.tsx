@@ -24,18 +24,20 @@ export function SellingPoints({ className }: { className?: string }) {
   const { t } = useI18n();
 
   return (
-    <div className={cn("selling-points-wrapper flex flex-wrap items-center justify-center gap-2", className)}>
+    <div className={cn("flex flex-wrap items-center justify-center gap-1.5", className)}>
       {SELLING_POINTS.map((point) => {
         const Icon = point.icon;
         return (
           <span
             key={point.labelKey}
             className={cn(
-              "golden-pill inline-flex items-center gap-1.5 px-3 py-1",
-              "text-xs font-semibold text-amber-800 dark:text-amber-100",
+              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full",
+              "text-[11px] font-medium text-muted-foreground",
+              "bg-muted/40 border border-border/60",
+              "transition-colors hover:bg-muted hover:text-foreground"
             )}
           >
-            <Icon size={12} className="shrink-0" />
+            <Icon size={11} className="shrink-0 opacity-70" />
             {t(point.labelKey)}
           </span>
         );

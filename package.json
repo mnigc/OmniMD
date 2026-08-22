@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "cd frontend && pnpm dev",
     "build": "cd frontend && pnpm build",
+    "bundle:python": "node scripts/bundle-python.mjs",
+    "bundle:tools": "powershell -ExecutionPolicy Bypass -File scripts/bundle-tools.ps1",
     "tauri": "tauri"
   },
   "devDependencies": {

@@ -11,6 +11,7 @@ import {
   importOfflineModel,
   checkModelUpdate,
   isModelDownloaded,
+  prepareEnvironment,
 } from "../api/tauriApi";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -24,6 +25,11 @@ interface ModelStore {
   downloadProgress: Record<string, DownloadProgress>;
   loading: boolean;
   modelReady: boolean;
+  /// Whether the one-time environment preparation (Python + model + MinerU) is
+  /// currently running in the background.
+  preparing: boolean;
+  /// Last preparation error (empty when none / succeeded).
+  prepareError: string | null;
 
   refreshModels: () => Promise<void>;
   refreshCacheInfo: () => Promise<void>;
@@ -35,7 +41,10 @@ interface ModelStore {
   setModelSource: (source: string) => Promise<void>;
   importOffline: (path: string) => Promise<void>;
   checkUpdate: (modelName: string) => Promise<boolean>;
+  /// Kick off automatic environment preparation (no user interaction needed).
+  prepare: () => Promise<void>;
   listenForProgress: () => Promise<() => void>;
+  listenForEnvPrepare: () => Promise<() => void>;
 }
 
 export const useModelStore = create<ModelStore>((set, get) => ({
@@ -46,6 +55,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   downloadProgress: {},
   loading: false,
   modelReady: true,
+  preparing: false,
+  prepareError: null,
 
   refreshModels: async () => {
     try {
@@ -172,6 +183,44 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       );
     } catch (e) {
       console.error("listenForProgress failed:", e);
+    }
+
+    return () => {
+      unlisten?.();
+    };
+  },
+
+  prepare: async () => {
+    if (get().preparing) return;
+    set({ preparing: true, prepareError: null });
+    try {
+      await prepareEnvironment();
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : e?.message ?? String(e ?? "未知错误");
+      set({ preparing: false, prepareError: msg });
+    }
+  },
+
+  listenForEnvPrepare: async () => {
+    let unlisten: UnlistenFn | null = null;
+    try {
+      const appWindow = getCurrentWebviewWindow();
+      unlisten = await appWindow.listen<{
+        stage: string;
+        progress: number;
+        detail: string;
+      }>("env-prepare-progress", (event) => {
+        const { stage, detail } = event.payload;
+        if (stage === "done") {
+          set({ preparing: false, prepareError: null, modelReady: true });
+        } else if (stage === "error") {
+          set({ preparing: false, prepareError: detail });
+        } else {
+          set({ preparing: true, prepareError: null });
+        }
+      });
+    } catch (e) {
+      console.error("listenForEnvPrepare failed:", e);
     }
 
     return () => {
