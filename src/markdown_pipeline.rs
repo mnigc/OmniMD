@@ -427,33 +427,35 @@ fn strip_residual_html(markdown: &str) -> String {
 /// with `<` optionally followed by `/`, then a letter, and ends at the next
 /// `>`. Anything outside tags is kept verbatim.
 fn strip_html_from_line(line: &str) -> String {
-    let bytes = line.as_bytes();
-    let len = bytes.len();
     let mut out = String::with_capacity(line.len());
-    let mut i = 0;
-    while i < len {
-        if bytes[i] == b'<' {
-            // Peek: optional '/' then a letter means this looks like an HTML tag.
-            let mut j = i + 1;
-            if j < len && bytes[j] == b'/' {
-                j += 1;
+    let mut chars = line.char_indices().peekable();
+    while let Some((_, ch)) = chars.next() {
+        if ch == '<' {
+            // Peek past an optional '/' then require a letter: that means
+            // this looks like an HTML tag opening.
+            let mut lookahead = chars.clone();
+            let mut next = lookahead.next().map(|(_, c)| c);
+            if next == Some('/') {
+                next = lookahead.next().map(|(_, c)| c);
             }
-            if j < len && bytes[j].is_ascii_alphabetic() {
+            if next.is_some_and(|c| c.is_ascii_alphabetic()) {
                 // Scan to the closing '>'.
-                let mut end = j;
-                while end < len && bytes[end] != b'>' {
-                    end += 1;
+                let mut closed = false;
+                for (_, c) in lookahead.by_ref() {
+                    if c == '>' {
+                        closed = true;
+                        break;
+                    }
                 }
-                if end < len {
-                    // Drop the whole tag (i..=end).
-                    i = end + 1;
+                if closed {
+                    // Drop the whole tag.
+                    chars = lookahead;
                     continue;
                 }
                 // No closing '>' on this line — keep the '<' as literal text.
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        out.push(ch);
     }
     out
 }
@@ -764,6 +766,20 @@ mod tests {
         let input = "```\n<div>keep me</div>\n```\n";
         let result = strip_residual_html(input);
         assert!(result.contains("<div>keep me</div>"));
+    }
+
+    #[test]
+    fn strip_residual_html_preserves_multibyte_text() {
+        let input = "<p>中文标题</p>\n\n<b>日本語テキスト</b> 与 emoji 😀";
+        let result = strip_residual_html(input);
+        assert_eq!(result, "中文标题\n\n日本語テキスト 与 emoji 😀");
+    }
+
+    #[test]
+    fn strip_html_from_line_keeps_unclosed_lt_literal() {
+        let input = "1 < 2 且 <b>加粗</b>";
+        let result = strip_html_from_line(input);
+        assert_eq!(result, "1 < 2 且 加粗");
     }
 
     #[test]

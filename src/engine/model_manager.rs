@@ -152,6 +152,14 @@ pub struct ModelManager {
     download_cancel: Arc<AtomicBool>,
 }
 
+struct DownloadingGuard(Arc<AtomicBool>);
+
+impl Drop for DownloadingGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
 impl ModelManager {
     pub fn new() -> Self {
         ModelManager {
@@ -218,15 +226,13 @@ impl ModelManager {
         if self.downloading.swap(true, Ordering::Relaxed) {
             return Err("已有下载任务在进行中".to_string());
         }
+        let _downloading_guard = DownloadingGuard(self.downloading.clone());
         self.download_cancel.store(false, Ordering::Relaxed);
 
         let repo_id = match model_name {
             "pipeline" => "opendatalab/PDF-Extract-Kit",
             "vlm" => "opendatalab/PDF-Extract-Kit-VLM",
-            _ => {
-                self.downloading.store(false, Ordering::Relaxed);
-                return Err(format!("未知模型: {}", model_name));
-            }
+            _ => return Err(format!("未知模型: {}", model_name)),
         };
 
         let cache_dir = model_cache_dir().join(model_name);
@@ -282,7 +288,8 @@ impl ModelManager {
 
             // Skip if file already exists and size matches.
             if let Ok(meta) = std::fs::metadata(&file_path) {
-                if meta.len() == file.size.unwrap_or(0) || meta.len() > 0 {
+                let expected = file.size.unwrap_or(0);
+                if meta.len() == expected || (expected == 0 && meta.len() > 0) {
                     downloaded_bytes += meta.len();
                     continue;
                 }
@@ -359,7 +366,6 @@ impl ModelManager {
             downloaded_bytes += downloaded;
         }
 
-        self.downloading.store(false, Ordering::Relaxed);
         let _ = app.emit(
             "model-download-progress",
             DownloadProgressDto {
