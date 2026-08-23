@@ -581,7 +581,7 @@ export function LibraryPage() {
           size="icon"
           onClick={handleDeleteWorkspace}
           disabled={!activeWs}
-          title={t("library.deleteWorkspaceHint")}
+          title={t("library.deleteWorkspace")}
         >
           <Trash2 size={15} className="text-destructive" />
         </Button>
