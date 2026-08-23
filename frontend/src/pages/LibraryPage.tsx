@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useState } from "react";
 import {
   BookOpenText,
   ChevronDown,
@@ -9,6 +9,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  Loader2,
   Plus,
   RefreshCw,
   Save,
@@ -375,6 +376,11 @@ export function LibraryPage() {
   const editorFilePath = selectedDoc && activeWs ? joinPath(activeWs.path, selectedDoc.path) : null;
   const { saving: librarySaving, saveNow: librarySaveNow } = useAutoSave(previewContent, libraryViewMode === "edit" ? editorFilePath : null);
 
+  // Markdown parsing is expensive; defer it so clicking a document updates the
+  // selection/list immediately and the preview catches up right after paint.
+  const deferredPreviewContent = useDeferredValue(previewContent);
+  const isRenderingPreview = deferredPreviewContent !== previewContent;
+
   const tabs: { id: ViewMode; label: string }[] = [
     { id: "browse", label: t("library.allDocs") },
     { id: "favorites", label: t("library.favorites") },
@@ -680,7 +686,7 @@ export function LibraryPage() {
         </div>
 
         {/* Right: preview */}
-        <section className="flex-1 flex flex-col overflow-hidden">
+        <section className="flex-1 flex flex-col overflow-hidden relative">
           {selectedDoc && previewContent !== null ? (
             <>
               <div className="px-4 py-2.5 border-b shrink-0">
@@ -725,11 +731,21 @@ export function LibraryPage() {
                   </span>
                 </div>
               </div>
-              <div className="flex-1 overflow-auto">
-                {libraryViewMode === "edit" ? (
-                  <MarkdownEditor value={previewContent} onChange={setPreviewContent} />
-                ) : (
-                  <MarkdownPreview content={previewContent} />
+              <div className="flex-1 min-h-0 relative">
+                <div className="absolute inset-0 overflow-auto">
+                  {libraryViewMode === "edit" ? (
+                    <MarkdownEditor value={previewContent} onChange={setPreviewContent} />
+                  ) : (
+                    <MarkdownPreview content={deferredPreviewContent} />
+                  )}
+                </div>
+                {isRenderingPreview && libraryViewMode === "preview" && (
+                  <div className="absolute inset-0 flex items-start justify-center pt-4 pointer-events-none">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground bg-background/95 border border-border rounded-full px-3 py-1.5 shadow-sm">
+                      <Loader2 size={12} className="animate-spin text-primary" />
+                      {t("library.rendering")}
+                    </div>
+                  </div>
                 )}
               </div>
             </>

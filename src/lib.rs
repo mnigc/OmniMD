@@ -376,18 +376,31 @@ fn list_recent(app: tauri::AppHandle, workspace_id: Option<i64>, limit: Option<i
     db_handle(&app)?.list_recent(workspace_id, limit.unwrap_or(20))
 }
 
+// Library DB writes run off the main thread: sync commands execute there and
+// would block the UI whenever the DB mutex is briefly contended (e.g. a
+// workspace scan committing).
 #[tauri::command]
-fn set_document_favorite(
+async fn set_document_favorite(
     app: tauri::AppHandle,
     id: i64,
     favorite: bool,
 ) -> Result<(), String> {
-    db_handle(&app)?.set_favorite(id, favorite)
+    tauri::async_runtime::spawn_blocking(move || {
+        let handle = db_handle(&app)?;
+        handle.set_favorite(id, favorite)
+    })
+    .await
+    .map_err(|e| format!("后台任务异常退出: {e}"))?
 }
 
 #[tauri::command]
-fn record_document_open(app: tauri::AppHandle, id: i64) -> Result<(), String> {
-    db_handle(&app)?.record_open(id)
+async fn record_document_open(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let handle = db_handle(&app)?;
+        handle.record_open(id)
+    })
+    .await
+    .map_err(|e| format!("后台任务异常退出: {e}"))?
 }
 
 #[tauri::command]

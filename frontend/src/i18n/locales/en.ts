@@ -225,5 +225,6 @@
     searching: "Searching…",
     searchEmpty: "No matching documents",
     noPreview: "Select a document from the left to preview",
+    rendering: "Rendering…",
   },
 } as const;

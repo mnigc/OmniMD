@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -8,27 +9,26 @@ interface MarkdownPreviewProps {
   content: string;
 }
 
-export function MarkdownPreview({ content }: MarkdownPreviewProps) {
+/** Cheap heuristic: does the document contain anything HTML-like? rehype-raw
+ *  re-parses the whole HAST tree through a full HTML parser and is by far the
+ *  most expensive plugin — skip it entirely for documents without markup. */
+const HAS_HTML_RE = /<[a-zA-Z][^>]*>/;
+
+function MarkdownPreviewImpl({ content }: MarkdownPreviewProps) {
   const { t } = useI18n();
 
-  if (!content.trim()) {
+  // Parse only when the content actually changes. Parent re-renders (favorite
+  // toggles, openedAt updates, folder switches) no longer re-run the whole
+  // remark/rehype pipeline.
+  const rendered = useMemo(() => {
+    const rehypePlugins = HAS_HTML_RE.test(content)
+      ? [rehypeRaw, rehypeSlug]
+      : [rehypeSlug];
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-        <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-3">
-          <span className="text-2xl font-bold text-muted-foreground">{`{ }`}</span>
-        </div>
-        <p className="text-sm">{t("markdown.noContent")}</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="markdown-body px-6 py-5 sm:px-8">
-      <div className="max-w-4xl mx-auto">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeRaw, rehypeSlug]}
-          components={{
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={rehypePlugins}
+        components={{
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "");
             return match ? (
@@ -117,7 +117,25 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
       >
         {content}
       </ReactMarkdown>
+    );
+  }, [content]);
+
+  if (!content.trim()) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+        <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-3">
+          <span className="text-2xl font-bold text-muted-foreground">{`{ }`}</span>
+        </div>
+        <p className="text-sm">{t("markdown.noContent")}</p>
       </div>
+    );
+  }
+
+  return (
+    <div className="markdown-body px-6 py-5 sm:px-8">
+      <div className="max-w-4xl mx-auto">{rendered}</div>
     </div>
   );
 }
+
+export const MarkdownPreview = memo(MarkdownPreviewImpl);

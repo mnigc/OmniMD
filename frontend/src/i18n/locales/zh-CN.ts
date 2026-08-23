@@ -224,6 +224,7 @@ filePickFailed: "选择文件失败，请重试",
     searching: "搜索中…",
     searchEmpty: "未找到匹配的文档",
     noPreview: "从左侧选择文档查看预览",
+    rendering: "正在渲染…",
   },
 } as const;
 
