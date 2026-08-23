@@ -6,7 +6,6 @@ import { pickFiles, pickDir } from "../api/dialogs";
 import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
-import { useModelStore } from "../store/useModelStore";
 import { showToast } from "../lib/toast";
 
 interface DropZoneProps {
@@ -34,8 +33,7 @@ const dropHandledNatively = useRef(false);
   // same file multiple times.
   const onFilesRef = useRef(onFiles);
   onFilesRef.current = onFiles;
-  const { modelReady } = useModelStore();
-  const disabled = !modelReady;
+  const disabled = false;
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
@@ -46,10 +44,6 @@ const dropHandledNatively = useRef(false);
         const appWindow = getCurrentWebviewWindow();
         unlisten = await appWindow.onDragDropEvent((event) => {
           const type = event.payload.type;
-          const isDisabled = () => {
-            const s = useModelStore.getState();
-            return !s.modelReady;
-          };
           if (type === "enter") {
             const paths = (event.payload as { paths?: string[] }).paths ?? [];
             const single = paths.length === 1 ? paths[0] : undefined;
@@ -125,8 +119,6 @@ const dropHandledNatively = useRef(false);
     (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const s = useModelStore.getState();
-      if (!s.modelReady) return;
       setIsDragging(true);
     },
     []
@@ -191,7 +183,7 @@ const dropHandledNatively = useRef(false);
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       className={cn(
-        "group relative flex items-center gap-4 px-5 py-4 rounded-xl border-2 border-dashed",
+        "group relative flex flex-col items-center gap-3 px-5 py-4 rounded-xl border-2 border-dashed",
         "transition-all duration-300 ease-out",
         className,
         isDragging
@@ -201,46 +193,42 @@ const dropHandledNatively = useRef(false);
             : "border-border/70 bg-muted/20 hover:border-primary/50 hover:bg-muted/40 hover:shadow-md hover:shadow-primary/5"
       )}
     >
-      <div
-        className={cn(
-          "p-3 rounded-xl shrink-0 transition-all duration-300",
-          isDragging
-            ? "bg-primary/15 text-primary scale-110"
-            : "bg-muted/60 text-muted-foreground group-hover:text-primary group-hover:bg-primary/10"
-        )}
-      >
-        {isDragging ? (
-          isFolderDrag ? (
-            <FolderOpen size={24} />
-          ) : (
-            <Upload size={24} className="animate-bounce" />
-          )
-        ) : (
-          <FileUp size={24} />
-        )}
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">
-          {isDragging
-            ? isFolderDrag
-              ? t("dropzone.folderDetected")
-              : t("dropzone.releaseToConvert")
-            : t("dropzone.dropFilesOrFolder")}
-        </p>
-        <p
+      <div className="flex items-center gap-3">
+        <div
           className={cn(
-            "text-xs mt-1",
-            disabled ? "text-destructive" : "text-muted-foreground"
+            "p-3 rounded-xl shrink-0 transition-all duration-300",
+            isDragging
+              ? "bg-primary/15 text-primary scale-110"
+              : "bg-muted/60 text-muted-foreground group-hover:text-primary group-hover:bg-primary/10"
           )}
         >
-          {disabled
-            ? t("dropzone.disabledHint")
-            : t("dropzone.localLimits")}
-        </p>
+          {isDragging ? (
+            isFolderDrag ? (
+              <FolderOpen size={24} />
+            ) : (
+              <Upload size={24} className="animate-bounce" />
+            )
+          ) : (
+            <FileUp size={24} />
+          )}
+        </div>
+        <div>
+          <p className="text-sm font-medium">
+            {isDragging
+              ? isFolderDrag
+                ? t("dropzone.folderDetected")
+                : t("dropzone.releaseToConvert")
+              : t("dropzone.dropFilesOrFolder")}
+          </p>
+          {disabled && (
+            <p className="text-xs mt-1 text-destructive">
+              {t("dropzone.disabledHint")}
+            </p>
+          )}
+        </div>
       </div>
 
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-2 shrink-0 justify-center">
         <Button
           size="sm"
           variant="outline"

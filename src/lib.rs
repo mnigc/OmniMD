@@ -16,9 +16,8 @@ use db::{
     db as db_handle, DocumentDto, FolderDto, ScanResultDto, SearchHitDto, WorkspaceDto,
 };
 use engine::batch_queue::BatchQueue;
-use engine::mineru_engine::MinerUEngine;
-use engine::mineru_runtime::MinerURuntime;
-use engine::model_manager::{self, ModelManager};
+use engine::stub_engine::StubEngine;
+use engine::model_manager::ModelManager;
 use engine::DocumentEngine;
 use models::ocr::{Cancellation, ProgressCallback};
 use models::task::{
@@ -76,17 +75,6 @@ pub struct ErrorDto {
     pub retryable: bool,
 }
 
-/// Progress of the one-time environment preparation (Python + model + MinerU).
-/// Emitted on `env-prepare-progress` while `prepare_environment` runs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvPrepareProgressDto {
-    /// One of: `python` | `model` | `mineru` | `done` | `error`.
-    pub stage: String,
-    pub progress: f32,
-    pub detail: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskProgressDto {
@@ -114,7 +102,6 @@ pub struct ConverterInfo {
 struct AppState {
     tasks: Mutex<HashMap<String, ConversionTask>>,
     cancellations: Mutex<HashMap<String, Cancellation>>,
-    runtime: Mutex<Option<Arc<MinerURuntime>>>,
     queue_engine: Mutex<Option<Arc<dyn DocumentEngine>>>,
     batch_queue: BatchQueue,
     model_manager: ModelManager,
@@ -125,7 +112,6 @@ impl Default for AppState {
         AppState {
             tasks: Mutex::new(HashMap::new()),
             cancellations: Mutex::new(HashMap::new()),
-            runtime: Mutex::new(None),
             queue_engine: Mutex::new(None),
             batch_queue: BatchQueue::new(3),
             model_manager: ModelManager::new(),
@@ -134,20 +120,11 @@ impl Default for AppState {
 }
 
 impl AppState {
-    /// Lazily create the MinerU runtime bound to a stable loopback port.
-    fn mineru_runtime(&self) -> Arc<MinerURuntime> {
-        let mut guard = self.runtime.lock().unwrap();
-        if let Some(r) = guard.as_ref() {
-            return r.clone();
-        }
-        let runtime = Arc::new(MinerURuntime::new(18628, model_manager::install_dir()));
-        *guard = Some(runtime.clone());
-        runtime
-    }
-
-    /// Create a local MinerU engine sharing the lazily created runtime.
+    /// Create the document conversion engine. The recognition engine was
+    /// removed (MinerU); a placeholder is returned until a real engine is
+    /// integrated.
     fn create_engine(&self) -> Arc<dyn DocumentEngine> {
-        Arc::new(MinerUEngine::new(self.mineru_runtime()))
+        Arc::new(StubEngine::new())
     }
 
     /// Lazily create and cache the engine for the batch queue.
@@ -458,92 +435,6 @@ fn search_documents(
     db_handle(&app)?.search(&query, workspace_id, limit.unwrap_or(50))
 }
 
-/// Check whether the bundled Python runtime is ready for mineru-api.
-#[tauri::command]
-async fn check_python_environment() -> Result<bool, String> {
-    ModelManager::check_python_environment()
-}
-
-/// Download and set up a portable Python + mineru-api.
-#[tauri::command]
-async fn setup_python_environment(app: tauri::AppHandle) -> Result<(), String> {
-    ModelManager::setup_python_environment(&app).await
-}
-
-/// Start the MinerU runtime and wait until it is healthy. Returns engine info.
-#[tauri::command]
-async fn start_mineru(app: tauri::AppHandle) -> Result<String, String> {
-    let state = get_state(&app)?;
-    let runtime = state.mineru_runtime();
-    runtime.ensure_running().await?;
-    Ok(format!("MinerU 服务已就绪: {}", runtime.base_url))
-}
-
-/// Probe the MinerU runtime health without starting it.
-#[tauri::command]
-async fn mineru_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let state = get_state(&app)?;
-    let runtime = state.mineru_runtime();
-    let healthy = runtime.is_healthy().await;
-    Ok(serde_json::json!({
-        "healthy": healthy,
-        "baseUrl": runtime.base_url,
-    }))
-}
-
-/// One-time environment preparation that makes the app usable out of the box:
-/// ensure the Python runtime (bundled or auto-installed), download the default
-/// pipeline model if missing, and start the MinerU engine. Runs in the
-/// background and reports progress via `env-prepare-progress`; the frontend
-/// never needs to prompt the user to click "install" or "download".
-#[tauri::command]
-async fn prepare_environment(app: tauri::AppHandle) -> Result<(), String> {
-    let runtime = get_state(&app)?.mineru_runtime();
-    let model_mgr = ModelManager::new();
-    let app_for_task = app.clone();
-
-    tauri::async_runtime::spawn(async move {
-        let emit = |stage: &str, progress: f32, detail: &str| {
-            let _ = app_for_task.emit(
-                "env-prepare-progress",
-                EnvPrepareProgressDto {
-                    stage: stage.to_string(),
-                    progress,
-                    detail: detail.to_string(),
-                },
-            );
-        };
-
-        emit("python", 0.02, "正在准备 Python 运行环境…");
-        if let Err(e) = ModelManager::setup_python_environment(&app_for_task).await {
-            emit("error", 0.0, &format!("Python 环境准备失败：{e}"));
-            return;
-        }
-
-        emit("model", 0.1, "正在准备解析模型…");
-        let needs_model = match model_mgr.get_model_status("pipeline").await {
-            Ok(m) => m.status != "downloaded",
-            Err(_) => true,
-        };
-        if needs_model {
-            if let Err(e) = model_mgr.download_model(&app_for_task, "pipeline").await {
-                emit("error", 0.0, &format!("模型下载失败：{e}"));
-                return;
-            }
-        }
-
-        emit("mineru", 0.97, "正在启动 MinerU 引擎…");
-        if let Err(e) = runtime.ensure_running().await {
-            emit("error", 0.0, &format!("MinerU 启动失败：{e}"));
-            return;
-        }
-
-        emit("done", 1.0, "环境准备完成");
-    });
-
-    Ok(())
-}
-
 #[tauri::command]
 async fn fetch_url(
     app: tauri::AppHandle,
@@ -716,7 +607,7 @@ fn get_supported_formats() -> Vec<String> {
 #[tauri::command]
 fn get_converter_info() -> String {
     let info = ConverterInfo {
-        name: "MinerU 3.x".to_string(),
+        name: "none".to_string(),
         supported_formats: get_supported_formats(),
     };
     serde_json::to_string(&info).unwrap_or_default()
@@ -916,18 +807,6 @@ fn batch_get_summary(app: tauri::AppHandle) -> Result<BatchSummaryDto, String> {
 }
 
 
-/// Whether the local pipeline model has been downloaded (non-empty
-/// `models/pipeline` directory). Used to decide when to show the first-launch
-/// download banner.
-#[tauri::command]
-async fn is_model_downloaded(app: tauri::AppHandle) -> Result<bool, String> {
-    let state = get_state(&app)?;
-    let models = state.model_manager.list_models().await?;
-    Ok(models
-        .iter()
-        .any(|m| m.name == "pipeline" && m.status == "downloaded"))
-}
-
 // ---------------------------------------------------------------------------
 // Model management commands
 // ---------------------------------------------------------------------------
@@ -996,9 +875,8 @@ async fn check_model_update(app: tauri::AppHandle, model_name: String) -> Result
 
 /// Initialize a tracing subscriber that writes to a log file under the
 /// user-writable AppData/Roaming/OmniMD/logs directory (falling back to stdout
-/// if that file cannot be created). This makes runtime diagnostics — including
-/// the captured `mineru-api` stdout/stderr — inspectable instead of being
-/// silently discarded in a bundled build.
+/// if that file cannot be created). This makes runtime diagnostics inspectable
+/// instead of being silently discarded in a bundled build.
 fn init_logging() {
     use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
 
@@ -1101,8 +979,6 @@ pub fn run() {
             convert_file,
             fetch_url,
             cancel_task,
-            start_mineru,
-            mineru_status,
             get_default_output_dir,
             open_folder,
             get_supported_formats,
@@ -1137,7 +1013,6 @@ pub fn run() {
             batch_set_concurrency,
             batch_list_tasks,
             batch_get_summary,
-            is_model_downloaded,
             list_models,
             get_model_status,
             download_model,
@@ -1148,9 +1023,6 @@ pub fn run() {
             get_model_source,
             import_offline_model,
             check_model_update,
-            check_python_environment,
-            setup_python_environment,
-            prepare_environment,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

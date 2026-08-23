@@ -28,20 +28,12 @@ import {
   getActiveWorkspace,
   writeTextFile,
   scanWorkspace,
-  startMineru,
-  checkPythonEnvironment,
-  setupPythonEnvironment,
 } from "./api/tauriApi";
 import { ToastPortal, showToast } from "./lib/toast";
-import { useTaskStore } from "./store/useTaskStore";
 import { useBatchStore } from "./store/useBatchStore";
-import { useModelStore } from "./store/useModelStore";
 import { useSettingsStore } from "./store/useSettingsStore";
-import { BatchTaskPanel } from "./components/BatchTaskPanel";
-import { ModelBanner } from "./components/ModelBanner";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
-import type { ModelInfo, PythonSetupProgress } from "./types";
 
 type Page = "home" | "library" | "convert" | "history" | "settings";
 
@@ -50,9 +42,6 @@ export function App() {
   const [page, setPage] = useState<Page>("home");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [appVersion, setAppVersion] = useState("v0.1.0");
-const { modelReady, downloading, downloadProgress, preparing, prepareError } = useModelStore();
-  const batchPanelOpen = useBatchStore((s) => s.panelOpen);
-  const setBatchPanelOpen = useBatchStore((s) => s.setPanelOpen);
 
   useEffect(() => {
     getAppVersion().then(setAppVersion).catch(() => {});
@@ -108,8 +97,7 @@ const { modelReady, downloading, downloadProgress, preparing, prepareError } = u
 
   // Register batch-task event listeners once at the app level so HomePage and
   // other pages receive live status/progress updates even when the batch panel
-  // is closed. (Previously listeners were only registered while the panel was
-  // open, so clicking "start" from the home page appeared to do nothing.)
+  // is closed.
   useEffect(() => {
     let cleanup: (() => void) | null = null;
     (async () => {
@@ -129,104 +117,12 @@ const { modelReady, downloading, downloadProgress, preparing, prepareError } = u
   }, []);
 
   // Load persisted batch tasks from the DB on startup so the queue is not
-  // empty after a restart. (Tasks survive in SQLite across sessions.)
+  // empty after a restart.
   useEffect(() => {
     useBatchStore.getState().refreshTasks();
     useBatchStore.getState().refreshSummary();
   }, []);
 
-  // First-launch check: whether the local pipeline model exists.
-  // Also registers the model download progress listener shared with the
-  // Settings page, and kicks off automatic environment preparation so the app
-  // is ready to use without any manual "install / download" clicks.
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    let envUnlisten: (() => void) | null = null;
-    (async () => {
-      try {
-        const store = useModelStore.getState();
-        await store.refreshModelReady();
-        unlisten = await store.listenForProgress();
-        envUnlisten = await store.listenForEnvPrepare();
-        // Automatically prepare Python + model + MinerU on first launch.
-        if (!useModelStore.getState().modelReady) {
-          useModelStore.getState().prepare();
-        }
-      } catch {
-        // Not running in Tauri
-      }
-    })();
-    return () => {
-      unlisten?.();
-      envUnlisten?.();
-    };
-  }, []);
-
-  // Listen for Python setup progress (auto-setup triggered by model download).
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    (async () => {
-      try {
-        const appWindow = getCurrentWebviewWindow();
-        unlisten = await appWindow.listen<PythonSetupProgress>(
-          "python-setup-progress",
-          (event) => {
-            const p = event.payload;
-            if (p.stage === "downloading") {
-              showToast(`正在下载 Python 运行时…`, 120000);
-            } else if (p.stage === "extracting") {
-              showToast(`正在解压 Python 运行时…`, 120000);
-            } else if (p.stage === "installing") {
-              showToast(`正在安装 mineru-api…`, 120000);
-            } else if (p.stage === "completed") {
-              showToast(`Python 运行环境安装完成`, 3000);
-            } else if (p.stage === "error") {
-              showToast(`Python 环境安装失败: ${p.detail}`, 6000);
-            }
-          }
-        );
-      } catch {}
-    })();
-    return () => { unlisten?.(); };
-  }, []);
-
-  // React to pipeline model downloads that happen elsewhere (e.g. the
-  // Settings page): mark the model ready, set up Python if needed, and
-  // auto-start the MinerU engine.
-  useEffect(() => {
-    const checkModelReady = async (models: ModelInfo[]) => {
-      const pipelineReady = models.some(
-        (m) => m.name === "pipeline" && m.status === "downloaded"
-      );
-      if (!pipelineReady) return;
-      useModelStore.getState().refreshModelReady();
-
-      // Ensure the Python environment (bundled Python + mineru-api) is set up.
-      const pyReady = await checkPythonEnvironment().catch(() => false);
-      if (!pyReady) {
-        try {
-          await setupPythonEnvironment();
-        } catch {
-          // Python setup failed; the user can try from Settings page.
-          return;
-        }
-      }
-
-      startMineru().catch(() => {});
-    };
-    checkModelReady(useModelStore.getState().models);
-    const unsub = useModelStore.subscribe((state) => checkModelReady(state.models));
-    return unsub;
-  }, []);
-
-  const handleDownloadModel = useCallback(async () => {
-    await useModelStore.getState().prepare();
-  }, []);
-
-  // Close batch panel when page changes to avoid stale event listeners
-  useEffect(() => {
-    setBatchPanelOpen(false);
-  }, [page, setBatchPanelOpen]);
   const handleNewMarkdown = useCallback(async () => {
     const ws = await getActiveWorkspace();
     if (!ws) { showToast(t("editor.newFileHint")); return; }
@@ -288,34 +184,9 @@ const { modelReady, downloading, downloadProgress, preparing, prepareError } = u
           </span>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setBatchPanelOpen(true);
-              useBatchStore.getState().refreshTasks();
-              useBatchStore.getState().refreshSummary();
-            }}
-            className="text-xs gap-1.5"
-          >
-            {t("batch.title")}
-          </Button>
+          <WindowControls />
         </div>
-        <WindowControls />
       </header>
-
-      {!modelReady && (
-        <ModelBanner
-          preparing={preparing}
-          prepareError={prepareError}
-          downloading={downloading}
-          progress={downloadProgress.pipeline?.progress ?? 0}
-          onRetry={handleDownloadModel}
-          onCancelDownload={() => {
-            useModelStore.getState().cancelDownload();
-          }}
-        />
-      )}
 
       <div className="flex flex-1 overflow-hidden">
         <aside
@@ -369,7 +240,6 @@ const { modelReady, downloading, downloadProgress, preparing, prepareError } = u
                 <span>{t("home.phase1Mvp")}</span>
                 <span>{appVersion}</span>
               </div>
-              <div className="opacity-70 truncate">{t("home.minerUTauri")}</div>
             </div>
           </div>
         </aside>
@@ -380,10 +250,6 @@ const { modelReady, downloading, downloadProgress, preparing, prepareError } = u
           </div>
         </main>
       </div>
-      <BatchTaskPanel
-        open={batchPanelOpen}
-        onClose={() => setBatchPanelOpen(false)}
-      />
       <ToastPortal />
     </div>
   );

@@ -2,14 +2,6 @@
 
 This project incorporates components from the following third-party projects.
 
-## MinerU
-
-- **Source**: OpenDataLab / MinerU
-- **License**: Apache-2.0 (with additional model license terms — see `LICENSE` for details)
-- **Description**: Document parsing engine (MinerU 3.x). OmniMD shells out to the official `mineru-api` FastAPI service as a subprocess and communicates over HTTP.
-- **Website**: https://github.com/opendatalab/MinerU
-- **Models**: Downloaded at first use from HuggingFace / ModelScope. Users must review and accept individual model license terms.
-
 ## Tauri
 
 - **License**: Apache-2.0
@@ -25,7 +17,7 @@ This project incorporates components from the following third-party projects.
 ## reqwest
 
 - **License**: MIT / Apache-2.0
-- **Description**: HTTP client used to communicate with the MinerU API service.
+- **Description**: HTTP client used for web page fetching and downloads.
 - **Repository**: https://github.com/seanmonstar/reqwest
 
 ## rusqlite

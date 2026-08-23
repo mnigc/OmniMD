@@ -134,7 +134,7 @@ cd frontend && pnpm build
 |------|------|
 | 데스크톱 프레임워크 | Tauri 2 |
 | 백엔드 언어 | Rust 2021 edition |
-| 변환 엔진 | [MinerU](https://github.com/opendatalab/MinerU) 3.x (via `mineru-api`) |
+| 변환 엔진 | 미연동（MinerU 제거됨, 현재 플레이스홀더） |
 | 비동기 런타임 | tokio |
 | 프론트엔드 프레임워크 | React 18 + TypeScript 5 |
 | 빌드 도구 | Vite 5 |

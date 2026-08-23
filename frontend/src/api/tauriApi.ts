@@ -34,21 +34,6 @@ export async function convertFile(
   });
 }
 
-/** Ensure the bundled MinerU API service subprocess is running. */
-export async function startMineru(): Promise<string> {
-  return invoke<string>("start_mineru");
-}
-
-export interface MineruStatus {
-  healthy: boolean;
-  baseUrl: string;
-}
-
-/** Probe the status of the MinerU API service subprocess. */
-export async function mineruStatus(): Promise<MineruStatus> {
-  return invoke<MineruStatus>("mineru_status");
-}
-
 /** Ask the backend to stop a running conversion at the next checkpoint. */
 export async function cancelTask(taskId: string): Promise<void> {
   return invoke<void>("cancel_task", { taskId });
@@ -291,21 +276,4 @@ export async function importOfflineModel(path: string): Promise<void> {
 
 export async function checkModelUpdate(modelName: string): Promise<boolean> {
   return invoke<boolean>("check_model_update", { modelName });
-}
-
-export async function isModelDownloaded(): Promise<boolean> {
-  return invoke<boolean>("is_model_downloaded");
-}
-
-export async function checkPythonEnvironment(): Promise<boolean> {
-  return invoke<boolean>("check_python_environment");
-}
-
-export async function setupPythonEnvironment(): Promise<void> {
-  return invoke<void>("setup_python_environment");
-}
-
-/** One-time, fully automatic environment preparation (Python + model + MinerU). */
-export async function prepareEnvironment(): Promise<void> {
-  return invoke<void>("prepare_environment");
 }

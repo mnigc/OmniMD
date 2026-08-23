@@ -68,26 +68,18 @@ pnpm tauri dev
 
 ## 📦 打包发布
 
-发布安装包前，先把**便携版 Python + mineru** 预装进包体（一次构建、用户端零配置）：
-
 ```bash
-# 1. 预装打包工具（WiX 等），避免构建时从 GitHub 下载超时
-pnpm bundle:tools
-
-# 2. 预装 Python 运行环境与 mineru 到 bundle_extras/python/
-pnpm bundle:python
-
-# 3. 打包（会自动把 bundle_extras/python 打进安装包）
-pnpm tauri build
+pnpm bundle:tools   # 预装打包工具（WiX 等），避免构建时从 GitHub 下载超时
+pnpm tauri build    # 打包生成安装包
 ```
 
 产物位于 `target/release/bundle/`，Windows 下生成 `.msi` 安装包。
 
-> 说明：`bundle_extras/` 由构建脚本生成（多 GB，已加入 `.gitignore`），**不提交到仓库**。普通开发（`pnpm tauri dev`）无需此步骤——缺失内置 Python 时应用会在首次启动时自动下载安装，行为与之前一致。`bundle:tools` 只需在出安装包、且本机尚未缓存 WiX 时跑一次。
+> 说明：`bundle:tools` 只需在出安装包、且本机尚未缓存 WiX 时跑一次。
 
-### 开箱即用（免手动配置）
+### 开箱即用
 
-安装后应用会自动完成环境就绪：首次启动静默下载默认 pipeline 模型并拉起 MinerU 引擎，**用户无需在设置里手动安装 Python 运行环境或点击下载模型**即可直接转换文档。若首次启动无网络导致准备失败，界面会提示重试，也可在「设置 → 模型管理」导入离线模型。
+应用启动即可直接转换文档（网页抓取走内置提取器）；本地文件解析所需的识别引擎需另行接入。
 
 ## 🏗️ 项目结构
 
@@ -145,7 +137,7 @@ cd frontend && pnpm build
 |----|------|
 | 桌面框架 | Tauri 2 |
 | 后端语言 | Rust 2021 edition |
-| 转换引擎 | [MinerU](https://github.com/opendatalab/MinerU) 3.x (via `mineru-api`) |
+| 转换引擎 | 未集成（MinerU 已移除，当前为占位实现） |
 | 异步运行时 | tokio |
 | 前端框架 | React 18 + TypeScript 5 |
 | 构建工具 | Vite 5 |
@@ -159,7 +151,7 @@ TODO: 添加 LICENSE 文件（建议 MIT 或 Apache-2.0）。
 
 ## 🗺️ 路线图
 
-- [x] Phase 1 MVP — 单文件 / 批量转换、MinerU 引擎集成
+- [x] Phase 1 MVP — 单文件 / 批量转换
 - [ ] Settings 页面配置（输出格式、并发数、OCR 开关）
 - [ ] OCR 图片文字识别（模型结构已预留于 `src/models/ocr.rs`）
 - [ ] 拖拽文件夹递归转换

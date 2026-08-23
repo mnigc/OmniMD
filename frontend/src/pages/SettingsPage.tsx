@@ -1,5 +1,5 @@
-﻿import { useCallback, useEffect, useState } from "react";
-import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Sparkles, Cpu, Database, Download } from "lucide-react";
+﻿import { useEffect, useState } from "react";
+import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Sparkles, Cpu } from "lucide-react";
 import { useI18n } from "../i18n";
 import { type ThemeMode } from "../lib/theme";
 import { useThemeMode } from "../hooks/useThemeMode";
@@ -10,12 +10,9 @@ import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { mineruStatus, startMineru, getAppVersion, checkPythonEnvironment, setupPythonEnvironment, type MineruStatus } from "../api/tauriApi";
+import { getAppVersion } from "../api/tauriApi";
 import { pickOutputDir } from "../api/dialogs";
-import type { ParseQuality, PythonSetupProgress } from "../types";
-import { useModelStore } from "../store/useModelStore";
-import { ModelCard } from "../components/ModelCard";
-import { ModelCacheSection } from "../components/ModelCacheSection";
+import type { ParseQuality } from "../types";
 
 const themeOptions: {
   value: ThemeMode;
@@ -36,7 +33,6 @@ interface NavSection {
 const SECTIONS: NavSection[] = [
   { id: "appearance", icon: <Sun size={15} />, labelKey: "settings.appearance" },
   { id: "conversion", icon: <Cpu size={15} />, labelKey: "settings.conversion" },
-  { id: "models", icon: <Database size={15} />, labelKey: "model.title" },
   { id: "ai", icon: <Sparkles size={15} />, labelKey: "settings.ai" },
   { id: "privacy", icon: <ShieldCheck size={15} />, labelKey: "settings.privacy" },
   { id: "about", icon: <Monitor size={15} />, labelKey: "settings.about" },
@@ -148,93 +144,11 @@ export function SettingsPage() {
   } = useSettingsStore();
 
   const [activeSection, setActiveSection] = useState("appearance");
-  const [mineruInfo, setMineruInfo] = useState<MineruStatus | null>(null);
-  const [mineruStarting, setMineruStarting] = useState(false);
-  const [mineruError, setMineruError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("v0.1.0");
-  const [pythonSettingUp, setPythonSettingUp] = useState(false);
-  const [pythonSetupProgress, setPythonSetupProgress] = useState<PythonSetupProgress | null>(null);
-  const [pythonReady, setPythonReady] = useState(false);
-
-  const { models, refreshModels, refreshCacheInfo, refreshModelSource, listenForProgress } = useModelStore();
 
   useEffect(() => {
     getAppVersion().then(setAppVersion).catch(() => {});
   }, []);
-
-  useEffect(() => {
-    refreshModels();
-    refreshCacheInfo();
-    refreshModelSource();
-    let cleanup: (() => void) | null = null;
-    listenForProgress().then((fn) => { cleanup = fn; });
-    return () => { cleanup?.(); };
-  }, [refreshModels, refreshCacheInfo, refreshModelSource, listenForProgress]);
-
-  const refreshMineruStatus = useCallback(async () => {
-    try {
-      const info = await mineruStatus();
-      setMineruInfo(info);
-      setMineruError(null);
-    } catch (e) {
-      setMineruInfo(null);
-      setMineruError(String(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshMineruStatus();
-  }, [refreshMineruStatus]);
-
-  useEffect(() => {
-    checkPythonEnvironment().then(setPythonReady).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    (async () => {
-      try {
-        const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-        const appWindow = getCurrentWebviewWindow();
-        unlisten = await appWindow.listen<PythonSetupProgress>(
-          "python-setup-progress",
-          (event) => {
-            const p = event.payload;
-            setPythonSetupProgress(p);
-            if (p.stage === "completed") {
-              setPythonReady(true);
-              setPythonSettingUp(false);
-            }
-          }
-        );
-      } catch {}
-    })();
-    return () => { unlisten?.(); };
-  }, []);
-
-  const handleStartMineru = async () => {
-    setMineruStarting(true);
-    setMineruError(null);
-    try {
-      await startMineru();
-      await refreshMineruStatus();
-    } catch (e) {
-      setMineruError(String(e));
-    } finally {
-      setMineruStarting(false);
-    }
-  };
-
-  const handleSetupPython = async () => {
-    setPythonSettingUp(true);
-    setPythonSetupProgress({ stage: "starting", progress: 0, detail: "正在准备\u2026" });
-    try {
-      await setupPythonEnvironment();
-    } catch (e) {
-      setPythonSetupProgress({ stage: "error", progress: 0, detail: String(e) });
-      setPythonSettingUp(false);
-    }
-  };
 
   const handleBrowseOutputDir = async () => {
     const dir = await pickOutputDir();
@@ -348,119 +262,15 @@ export function SettingsPage() {
                   </div>
                   <div className="py-2.5">
                     <span className="text-sm text-muted-foreground block mb-2">
-                      {t("settings.mineru")}
+                      {t("settings.engineNotice")}
                     </span>
-                    <div className="flex items-center justify-between gap-3 rounded-md border p-3">
-                      <div className="flex flex-col gap-1 min-w-0">
-                        <span className="text-sm flex items-center gap-2">
-                          <Cpu size={14} className={cn(
-                            "shrink-0",
-                            mineruInfo?.healthy
-                              ? "text-emerald-500"
-                              : "text-muted-foreground"
-                          )} />
-                          {mineruInfo
-                            ? mineruInfo.healthy
-                              ? t("settings.mineruHealthy")
-                              : t("settings.mineruUnhealthy")
-                            : t("settings.mineruChecking")}
-                        </span>
-                        {mineruError && (
-                          <span className="text-xs text-destructive break-all">
-                            {mineruError}
-                          </span>
-                        )}
-                      </div>
-                      <Button
-                        variant="outline"
-                        disabled={mineruStarting || mineruInfo?.healthy}
-                        onClick={handleStartMineru}
-                      >
-                        {mineruStarting
-                          ? t("settings.mineruStarting")
-                          : t("settings.mineruStart")}
-                      </Button>
-                    </div>
                     <span className="text-xs text-muted-foreground/70 mt-1.5 block">
-                      {t("settings.mineruDesc")}
-                    </span>
-                  </div>
-                  <div className="py-2.5 border-t border-border/50 pt-4">
-                    <span className="text-sm text-muted-foreground block mb-2">
-                      Python 运行环境
-                    </span>
-                    <div className="flex items-center justify-between gap-3 rounded-md border p-3">
-                      <div className="flex flex-col gap-1 min-w-0">
-                        <span className="text-sm flex items-center gap-2">
-                          <Download size={14} className={cn(
-                            "shrink-0",
-                            pythonReady
-                              ? "text-emerald-500"
-                              : "text-muted-foreground"
-                          )} />
-                          {pythonReady
-                            ? "已内置"
-                            : pythonSettingUp
-                              ? pythonSetupProgress?.detail ?? "正在安装\u2026"
-                              : "未安装"}
-                        </span>
-                        {pythonSetupProgress && !pythonReady && (
-                          <div className="mt-1">
-                            <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-primary transition-all rounded-full"
-                                style={{ width: `${(pythonSetupProgress.progress * 100).toFixed(0)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground mt-0.5 block">
-                              {pythonSetupProgress.detail}
-                            </span>
-                          </div>
-                        )}
-                        {pythonSetupProgress?.stage === "error" && (
-                          <span className="text-xs text-destructive break-all mt-1">
-                            {pythonSetupProgress.detail}
-                          </span>
-                        )}
-                      </div>
-                      <Button
-                        variant="outline"
-                        disabled={pythonSettingUp || pythonReady}
-                        onClick={handleSetupPython}
-                      >
-                        {pythonSettingUp ? "安装中\u2026" : "安装运行环境"}
-                      </Button>
-                    </div>
-                    <span className="text-xs text-muted-foreground/70 mt-1.5 block">
-                      {pythonReady
-                        ? "已随安装包内置便携版 Python 与 mineru-api，开箱即用，无需手动安装"
-                        : "自动下载并安装便携版 Python 及 mineru-api"}
+                      {t("settings.engineNoticeDesc")}
                     </span>
                   </div>
                 </div>
                 <div className="mt-4">
                   <OutputModeSelector />
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <div id="models">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Database size={16} />
-                  {t("model.title")}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {models.map((model) => (
-                    <ModelCard key={model.name} model={model} />
-                  ))}
-                  <div className="border-t border-border pt-4 mt-4">
-                    <ModelCacheSection />
-                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -530,7 +340,7 @@ export function SettingsPage() {
                 <div className="flex flex-col divide-y divide-border">
                   <InfoRow label={t("settings.version")}>{appVersion}</InfoRow>
                   <InfoRow label={t("settings.techStack")}>
-                    React 18 \u00b7 TypeScript \u00b7 Tauri 2 \u00b7 Tailwind CSS
+                    React 18 · TypeScript · Tauri 2 · Tailwind CSS
                   </InfoRow>
                   <InfoRow label={t("settings.language")}>
                     <span className="text-muted-foreground">

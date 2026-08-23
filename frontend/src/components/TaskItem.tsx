@@ -98,7 +98,7 @@ export function TaskItem({
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-lg border transition-colors",
+        "flex items-start gap-3 rounded-lg border transition-colors",
         compact
           ? "p-2 border-transparent hover:bg-muted"
           : "p-3 bg-card border-border hover:border-primary/40",
@@ -108,42 +108,44 @@ export function TaskItem({
       {isUrl ? (
         <Link
           size={16}
-          className="text-muted-foreground shrink-0"
+          className="text-muted-foreground shrink-0 mt-0.5"
         />
       ) : (
         <FileText
           size={16}
-          className="text-muted-foreground shrink-0"
+          className="text-muted-foreground shrink-0 mt-0.5"
         />
       )}
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  className={cn(
-                    "font-medium truncate cursor-help",
-                    compact ? "text-xs" : "text-sm"
-                  )}
-                >
-                  {fileName}
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" align="start" className="max-w-xs text-xs">
-                {fileName}
-              </TooltipContent>
-            </Tooltip>
-            {ext && (
-              <span className="text-xs px-1.5 py-0.5 bg-muted text-muted-foreground rounded shrink-0">
-                {ext}
-              </span>
-            )}
-            {modeLabel && (
-              <span className="text-[10px] px-1.5 py-0.5 bg-primary/10 text-primary rounded shrink-0">
-                {modeLabel}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className={cn(
+                "font-medium truncate cursor-help block",
+                compact ? "text-xs" : "text-sm"
+              )}
+            >
+              {fileName}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="start" className="max-w-xs text-xs">
+            {fileName}
+          </TooltipContent>
+        </Tooltip>
+
+        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+          {ext && (
+            <span className="text-xs px-1.5 py-0.5 bg-muted text-muted-foreground rounded shrink-0">
+              {ext}
             </span>
           )}
+          {modeLabel && (
+            <span className="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded shrink-0">
+              {modeLabel}
+            </span>
+          )}
+          <StatusBadge status={task.status} label={statusLabel} />
         </div>
 
         {!compact && (
@@ -175,10 +177,6 @@ export function TaskItem({
             </TooltipContent>
           </Tooltip>
         )}
-      </div>
-
-      <div className="shrink-0">
-        <StatusBadge status={task.status} label={statusLabel} />
       </div>
 
       {showActions && (

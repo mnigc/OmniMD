@@ -21,6 +21,7 @@ import {
   openFolder,
   getSupportedFormats,
   listFilesInFolder,
+  fetchUrl,
 } from "../api/tauriApi";
 import { pickOutputDir } from "../api/dialogs";
 import { confirm } from "@tauri-apps/plugin-dialog";
@@ -33,10 +34,10 @@ import { cn } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { Separator } from "../components/ui/separator";
 import {
   Card,
   CardContent,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
@@ -49,7 +50,7 @@ import {
 
 export function HomePage() {
   const { t } = useI18n();
-  const { tasks, start, loading, cancelAll, retryFailed, clearDone, enqueue, setPanelOpen } = useBatchStore();
+  const { tasks, start, loading, cancelAll, retryFailed, clearDone, enqueue, concurrency, setConcurrency } = useBatchStore();
   const { outputMode, defaultOutputDir, allowOnline, parseQuality } = useSettingsStore();
 
   const [outputDir, setOutputDir] = useState(defaultOutputDir);
@@ -86,9 +87,12 @@ export function HomePage() {
   const inferOutputDir = useCallback(
     (path: string): string => {
       if (outputLocationMode === "custom") return outputDir || ".";
+      if (path.startsWith("http://") || path.startsWith("https://")) {
+        return defaultOutputDir || ".";
+      }
       return path.replace(/\\/g, "/").split("/").slice(0, -1).join("/") || ".";
     },
-    [outputDir, outputLocationMode]
+    [outputDir, outputLocationMode, defaultOutputDir]
   );
 
   const handleFiles = useCallback(
@@ -118,7 +122,7 @@ export function HomePage() {
       await useBatchStore.getState().refreshTasks();
       await useBatchStore.getState().refreshSummary();
     },
-[inferOutputDir, outputMode, parseQuality, enqueue, t]
+    [inferOutputDir, outputMode, parseQuality, enqueue, t]
   );
 
   const addInputPaths = useCallback(async (paths: string[]) => {
@@ -168,24 +172,25 @@ export function HomePage() {
     setUrlError("");
     try {
       const dir = inferOutputDir(url);
-      const urlName = url.split("/").pop()?.split("?")[0] || "page";
-      const outputName = urlName.replace(/\.[^.]+$/, "") + ".md";
-      const outputPath = `${dir}/${outputName}`;
-      await enqueue(url, outputPath, outputMode, parseQuality);
+      await fetchUrl(url, dir, outputMode);
+      await useBatchStore.getState().refreshTasks();
+      await useBatchStore.getState().refreshSummary();
       setUrlInput("");
     } catch (err: any) {
       setUrlError(err.message || String(err));
     } finally {
       setDownloading(false);
     }
-  }, [urlInput, outputMode, parseQuality, inferOutputDir, allowOnline, enqueue, t]);
+  }, [urlInput, outputMode, inferOutputDir, allowOnline, t]);
 
-  const previewTasks = [...tasks]
+  const orderedTasks = [...tasks]
     .sort((a, b) => {
       const rank = (s: string) => (s === "Processing" ? 0 : s === "Pending" ? 1 : s === "Failed" ? 3 : 2);
       return rank(a.status) - rank(b.status);
-    })
-    .slice(0, 8);
+    });
+  const MAX_RENDERED_TASKS = 200;
+  const visibleTasks = orderedTasks.slice(0, MAX_RENDERED_TASKS);
+  const hiddenCount = orderedTasks.length - visibleTasks.length;
   const totalTasks = tasks.length;
   const pendingCount = tasks.filter((t) => t.status === "Pending").length;
   const processingCount = tasks.filter((t) => t.status === "Processing").length;
@@ -198,153 +203,218 @@ export function HomePage() {
     label: string;
     color: string;
   }) => (
-    <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-muted/40 border border-border/60">
-      <Icon size={10} className={color} />
+    <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-muted/50 border border-border/60">
+      <Icon size={12} className={color} />
       <span className="text-xs font-medium tabular-nums">{count}</span>
-      <span className="text-[10px] text-muted-foreground">{label}</span>
+      <span className="text-xs text-muted-foreground">{label}</span>
     </div>
   );
 
   return (
     <div className="h-full flex flex-col">
       <div className="flex-1 p-6 overflow-auto">
-        <div className="max-w-7xl mx-auto w-full flex flex-col gap-5">
-          <div className="text-center">
+        <div className="max-w-7xl mx-auto w-full flex flex-col gap-6">
+          {/* Hero — left aligned, compact */}
+          <div>
             <h1 className="text-xl font-semibold tracking-tight">{t("home.title")}</h1>
-            <p className="text-muted-foreground mt-1 text-sm">{t("home.subtitle")}</p>
-            <SellingPoints className="mt-3" />
+            <div className="mt-1 flex items-center gap-x-2 gap-y-1 flex-wrap text-xs text-muted-foreground">
+              <SellingPoints className="contents" />
+            </div>
           </div>
 
-          <div className="grid grid-cols-12 gap-5 flex-1 min-h-0">
-            <div className="col-span-7 flex flex-col gap-4 min-h-0">
-              <DropZone onFiles={addInputPaths} onFolder={handleFolder} formats={supportedFormats} />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Left column: input + settings */}
+            <div className="lg:col-span-6 flex flex-col gap-3 min-h-0">
+              {/* Card 1: 添加文件 */}
+              <Card>
+                <CardHeader className="pb-3 p-3">
+                  <CardTitle className="text-sm">{t("home.addFiles")}</CardTitle>
+                </CardHeader>
+                  <CardContent className="flex flex-col gap-3 p-3 pt-0">
+                  <DropZone onFiles={addInputPaths} onFolder={handleFolder} formats={supportedFormats} />
 
-              <OutputModeSelector />
+                  <div className="flex items-center gap-3">
+                    <span className="h-px flex-1 bg-border" />
+                    <span className="text-xs text-muted-foreground">{t("home.orPasteUrl")}</span>
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
 
-              <div className="flex flex-col gap-2">
-                <Label className="text-xs text-muted-foreground">{t("home.outputLocation")}</Label>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={() => setOutputLocationMode("sourceDir")}
-                    className={cn(
-                      "flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs font-medium whitespace-nowrap transition-all",
-                      outputLocationMode === "sourceDir"
-                        ? "border-primary bg-primary/5 text-primary shadow-sm"
-                        : "border-border bg-muted/30 text-muted-foreground hover:border-primary/40 hover:bg-muted/50"
-                    )}
-                  >
-                    <Inbox size={13} />
-                    {t("home.outputInSourceDir")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setOutputLocationMode("custom")}
-                    className={cn(
-                      "flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs font-medium whitespace-nowrap transition-all",
-                      outputLocationMode === "custom"
-                        ? "border-primary bg-primary/5 text-primary shadow-sm"
-                        : "border-border bg-muted/30 text-muted-foreground hover:border-primary/40 hover:bg-muted/50"
-                    )}
-                  >
-                    <FolderOpen size={13} />
-                    {t("home.outputCustom")}
-                  </button>
-                  {outputLocationMode === "custom" && (
-                    <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-                      <Input
-                        type="text"
-                        value={outputDir}
-                        onChange={(e) => setOutputDir(e.target.value)}
-                        placeholder={t("home.outputDirPlaceholder")}
-                        className="flex-1 min-w-0 h-8 text-xs"
-                      />
-                      <Button variant="outline" size="sm" onClick={handleBrowseOutputDir} className="h-8">
-                        <FolderOpen size={13} />
-                        {t("home.browse")}
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={handleOpenOutputDir} disabled={!outputDir} title={t("home.openHint")} className="h-8">
-                        <Folder size={13} />
-                        {t("home.open")}
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1 min-w-0">
+                        <Link size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                        <Input
+                          type="text"
+                          placeholder={allowOnline ? t("home.pasteUrl") : t("home.pasteUrlDisabled")}
+                          value={urlInput}
+                          onChange={(e) => setUrlInput(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") handleUrlSubmit(); }}
+                          disabled={downloading || !allowOnline}
+                          className="pl-8 text-xs h-9"
+                        />
+                      </div>
+                      <Button size="sm" onClick={handleUrlSubmit} disabled={downloading || !allowOnline || !urlInput.trim()} className="h-9 shrink-0">
+                        {downloading ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <Link size={13} />
+                        )}
+                        {t("home.convertNow")}
                       </Button>
                     </div>
-                  )}
-                </div>
-              </div>
+                    {urlError && (
+                      <p className="text-xs text-destructive break-words">{urlError}</p>
+                    )}
+                    {urlInput && (
+                      <p className="text-xs text-muted-foreground">{t("home.urlPrivacyNote")}</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
 
-              <div className="relative w-full max-w-md">
-                <Link size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                <Input
-                  type="text"
-                  placeholder={allowOnline ? t("home.pasteUrl") : t("home.pasteUrlDisabled")}
-                  value={urlInput}
-                  onChange={(e) => setUrlInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") handleUrlSubmit(); }}
-                  disabled={downloading || !allowOnline}
-                  className="pl-8 text-xs h-8"
-                />
-                {urlError && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="absolute -bottom-5 left-2.5 text-xs text-destructive truncate max-w-full cursor-help">{urlError}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs p-2 text-xs">
-                      <p className="whitespace-pre-wrap break-words">{urlError}</p>
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-              {urlInput && (
-                <p className="text-xs text-muted-foreground -mt-1">{t("home.urlPrivacyNote")}</p>
-              )}
+              {/* Card 2: 转换设置 */}
+              <Card>
+                <CardHeader className="pb-3 p-3">
+                  <CardTitle className="text-sm">{t("home.conversionSettings")}</CardTitle>
+                </CardHeader>
+                  <CardContent className="flex flex-col gap-4 p-3 pt-0">
+                  <OutputModeSelector />
 
-              <div className="mt-auto pt-2 flex items-center gap-2 flex-wrap">
-                <StatusChip icon={Loader2} count={processingCount} label={t("taskStatus.processing")} color="text-primary animate-spin" />
-                <StatusChip icon={CheckCircle2} count={completedCount} label={t("taskStatus.completed")} color="text-success" />
-                <StatusChip icon={XCircle} count={failedCount} label={t("taskStatus.failed")} color="text-destructive" />
-                <StatusChip icon={AlertTriangle} count={pendingCount} label={t("taskStatus.pending")} color="text-warning" />
-              </div>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs text-muted-foreground whitespace-nowrap">{t("batch.concurrency")}</Label>
+                    <select
+                      value={concurrency}
+                      onChange={(e) => setConcurrency(Number(e.target.value))}
+                      className="h-7 rounded border border-border bg-background px-2 text-xs"
+                    >
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <Separator />
+
+                  <div className="flex flex-col gap-2">
+                    <Label className="text-xs text-muted-foreground">{t("home.outputLocation")}</Label>
+                    <div className="inline-flex w-fit rounded-lg bg-muted p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setOutputLocationMode("sourceDir")}
+                        className={cn(
+                          "flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium transition-colors",
+                          outputLocationMode === "sourceDir"
+                            ? "bg-background text-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        <Inbox size={13} />
+                        {t("home.outputInSourceDir")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOutputLocationMode("custom")}
+                        className={cn(
+                          "flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium transition-colors",
+                          outputLocationMode === "custom"
+                            ? "bg-background text-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        <FolderOpen size={13} />
+                        {t("home.outputCustom")}
+                      </button>
+                    </div>
+                    {outputLocationMode === "custom" && (
+                      <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                        <Input
+                          type="text"
+                          value={outputDir}
+                          onChange={(e) => setOutputDir(e.target.value)}
+                          placeholder={t("home.outputDirPlaceholder")}
+                          className="flex-1 min-w-0 h-8 text-xs"
+                        />
+                        <Button variant="outline" size="sm" onClick={handleBrowseOutputDir} className="h-8">
+                          <FolderOpen size={13} />
+                          {t("home.browse")}
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleOpenOutputDir} disabled={!outputDir} title={t("home.openHint")} className="h-8">
+                          <Folder size={13} />
+                          {t("home.open")}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
             </div>
 
-            <div className="col-span-5 flex flex-col min-h-0">
-              <Card className="flex flex-col overflow-hidden flex-1 min-h-0">
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
+            {/* Right column: session */}
+            <div className="lg:col-span-6 flex flex-col min-h-0 overflow-hidden">
+              <Card className="flex flex-col overflow-hidden flex-1">
+                <CardHeader className="pb-3 p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
                     <CardTitle className="text-sm">
                       {t("home.sessionTitle")}{" "}
                       <span className="text-muted-foreground tabular-nums">({totalTasks})</span>
                     </CardTitle>
                     <div className="flex items-center gap-1">
-                      {tasks.some((t) => t.status === "Processing") ? (
-                        <Button variant="destructive" size="sm" onClick={async () => {
-                          if (await confirm('确定要取消所有进行中的转换吗？', { title: '取消转换', kind: 'warning' })) {
-                            cancelAll();
-                          }
-                        }} disabled={loading} className="h-7 text-xs">
-                          <X size={12} />
-                          {t("home.cancel")}
-                        </Button>
-                      ) : (
-                        <Button size="sm" onClick={start} disabled={pendingCount === 0} className="h-7 text-xs">
-                          <Play size={12} />
-                          {t("home.startConversion")}
-                        </Button>
-                      )}
                       {failedCount > 0 && !tasks.some((t) => t.status === "Processing") && (
-                        <Button variant="outline" size="sm" onClick={retryFailed} className="h-7 text-xs">
-                          <RotateCcw size={12} />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" onClick={retryFailed} className="h-7 w-7">
+                              <RotateCcw size={13} />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t("home.retryFailed")}</TooltipContent>
+                        </Tooltip>
                       )}
-                      <Button variant="outline" size="sm" onClick={clearDone} disabled={totalTasks === 0 || tasks.some((t) => t.status === "Processing")} className="h-7 text-xs">
-                        <Trash2 size={12} />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={clearDone}
+                        disabled={totalTasks === 0 || tasks.some((t) => t.status === "Processing")}
+                        title={t("home.clearSession")}
+                        className="h-7 w-7"
+                      >
+                        <Trash2 size={13} />
                       </Button>
                     </div>
                   </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <StatusChip icon={Loader2} count={processingCount} label={t("taskStatus.processing")} color="text-primary animate-spin" />
+                    <StatusChip icon={CheckCircle2} count={completedCount} label={t("taskStatus.completed")} color="text-success" />
+                    <StatusChip icon={XCircle} count={failedCount} label={t("taskStatus.failed")} color="text-destructive" />
+                    <StatusChip icon={AlertTriangle} count={pendingCount} label={t("taskStatus.pending")} color="text-warning" />
+                  </div>
                 </CardHeader>
+
+                <CardContent className="p-4 pt-0">
+                  {tasks.some((t) => t.status === "Processing") ? (
+                    <Button
+                      variant="destructive"
+                      className="w-full"
+                      onClick={async () => {
+                        if (await confirm(t("home.cancelConfirm"), { title: t("home.cancel"), kind: "warning" })) {
+                          cancelAll();
+                        }
+                      }}
+                      disabled={loading}
+                    >
+                      <X size={14} />
+                      {t("home.cancel")}
+                    </Button>
+                  ) : (
+                    <Button className="w-full" onClick={start} disabled={pendingCount === 0}>
+                      <Play size={14} />
+                      {t("home.startConversion")}
+                    </Button>
+                  )}
+                </CardContent>
 
                 <CardContent className="flex-1 min-h-0 p-0">
                   {totalTasks === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-center h-full">
+                    <div className="flex flex-col items-center justify-center py-12 text-center h-full">
                       <Inbox className="mx-auto mb-3 text-muted-foreground/40" size={36} />
                       <p className="text-sm font-medium">{t("home.noFilesInSession")}</p>
                       <p className="text-xs text-muted-foreground mt-1">
@@ -352,18 +422,15 @@ export function HomePage() {
                       </p>
                     </div>
                   ) : (
-                    <ScrollArea className="h-full max-h-[420px] overflow-y-auto">
-                      <div className="space-y-1.5 p-3 pt-1">
-                        {previewTasks.map((tsk) => (
+                    <ScrollArea className="h-full overflow-y-auto">
+                      <div className="space-y-1.5 p-4 pt-1">
+                        {visibleTasks.map((tsk) => (
                           <TaskItem key={tsk.id} task={tsk as any} compact />
                         ))}
-                        {totalTasks > 8 && (
-                          <button
-                            onClick={() => setPanelOpen(true)}
-                            className="w-full text-center text-xs text-primary py-2 hover:underline transition-colors"
-                          >
-                            {t("home.viewAll")} ({totalTasks - 8} more)
-                          </button>
+                        {hiddenCount > 0 && (
+                          <p className="text-center text-xs text-muted-foreground py-2">
+                            {t("batch.moreHidden").replace("{n}", String(hiddenCount))}
+                          </p>
                         )}
                       </div>
                     </ScrollArea>

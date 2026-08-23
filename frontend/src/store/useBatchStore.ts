@@ -21,11 +21,9 @@ import { showToast } from "../lib/toast";
 interface BatchStore {
   tasks: BatchTaskDto[];
   summary: BatchSummaryDto | null;
-  panelOpen: boolean;
   loading: boolean;
   concurrency: number;
 
-  setPanelOpen: (open: boolean) => void;
   setConcurrency: (n: number) => void;
   refreshTasks: () => Promise<void>;
   refreshSummary: () => Promise<void>;
@@ -44,11 +42,9 @@ interface BatchStore {
 export const useBatchStore = create<BatchStore>((set, get) => ({
   tasks: [],
   summary: null,
-  panelOpen: false,
   loading: false,
   concurrency: 3,
 
-  setPanelOpen: (open) => set({ panelOpen: open }),
   setConcurrency: (n) => {
     set({ concurrency: n });
     batchSetConcurrency(n).catch(() => {});

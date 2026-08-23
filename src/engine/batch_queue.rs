@@ -342,9 +342,16 @@ let active = active_tasks.lock().await.len();
 
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
 
+        // Collect the targets while borrowing the DB, then RELEASE the DB
+        // handle before updating: `update_status` acquires the same global DB
+        // mutex, and std Mutex is not reentrant — updating inside the borrow
+        // deadlocks the calling thread instantly, and the forever-held mutex
+        // then freezes every later DB command (including main-thread sync
+        // commands, i.e. the whole UI).
+        let mut targets: Vec<(String, u64)> = Vec::new();
         if let Ok(db) = crate::db::db(app) {
-// Paginate through all Processing and Pending tasks (not just 100).
             for status in &["Processing", "Pending"] {
+                // Paginate through all tasks of this status (not just 100).
                 let mut offset = 0u64;
                 const PAGE: u64 = 200;
                 loop {
@@ -358,7 +365,7 @@ let active = active_tasks.lock().await.len();
                         } else {
                             0
                         };
-                        update_status(app, &t.id, "Cancelled", None, elapsed);
+                        targets.push((t.id.clone(), elapsed));
                     }
                     if batch.len() < PAGE as usize {
                         break;
@@ -366,6 +373,9 @@ let active = active_tasks.lock().await.len();
                     offset += PAGE;
                 }
             }
+        }
+        for (id, elapsed) in &targets {
+            update_status(app, id, "Cancelled", None, *elapsed);
         }
         emit_summary(app);
         Ok(())
@@ -381,9 +391,15 @@ let active = active_tasks.lock().await.len();
     }
 
     pub async fn retry_failed(&self, app: &tauri::AppHandle, engine: Arc<dyn DocumentEngine>) -> Result<(), String> {
-        let mut any = false;
+        // Collect the failed task IDs while borrowing the DB, then RELEASE the
+        // DB handle before updating: `update_status` acquires the same global
+        // DB mutex, and std Mutex is not reentrant — updating inside the
+        // borrow deadlocks the calling thread instantly (self-reentrant lock),
+        // permanently freezing every later DB command including main-thread
+        // sync commands.
+        let mut ids: Vec<String> = Vec::new();
         if let Ok(db) = crate::db::db(app) {
-let mut offset = 0u64;
+            let mut offset = 0u64;
             const PAGE: u64 = 200;
             loop {
                 let batch = db.list_batch_tasks("Failed", PAGE, offset).unwrap_or_default();
@@ -391,8 +407,7 @@ let mut offset = 0u64;
                     break;
                 }
                 for t in &batch {
-                    update_status(app, &t.id, "Pending", None, 0);
-                    any = true;
+                    ids.push(t.id.clone());
                 }
                 if batch.len() < PAGE as usize {
                     break;
@@ -400,6 +415,10 @@ let mut offset = 0u64;
                 offset += PAGE;
             }
         }
+        for id in &ids {
+            update_status(app, id, "Pending", None, 0);
+        }
+        let any = !ids.is_empty();
         if any && !self.is_running() {
             self.start(app.clone(), engine).await;
         }

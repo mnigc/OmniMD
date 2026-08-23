@@ -24,21 +24,16 @@ export function SellingPoints({ className }: { className?: string }) {
   const { t } = useI18n();
 
   return (
-    <div className={cn("flex flex-wrap items-center justify-center gap-1.5", className)}>
-      {SELLING_POINTS.map((point) => {
+    <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1", className)}>
+      {SELLING_POINTS.map((point, i) => {
         const Icon = point.icon;
         return (
-          <span
-            key={point.labelKey}
-            className={cn(
-              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full",
-              "text-[11px] font-medium text-muted-foreground",
-              "bg-muted/40 border border-border/60",
-              "transition-colors hover:bg-muted hover:text-foreground"
-            )}
-          >
-            <Icon size={11} className="shrink-0 opacity-70" />
-            {t(point.labelKey)}
+          <span key={point.labelKey} className="inline-flex items-center gap-1">
+            {i > 0 && <span className="opacity-40">·</span>}
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Icon size={12} className="shrink-0 opacity-70" />
+              {t(point.labelKey)}
+            </span>
           </span>
         );
       })}

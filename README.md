@@ -88,7 +88,7 @@ OmniMD/
 │   ├── lib.rs              # Tauri command registration (frontend API)
 │   ├── pipeline.rs         # Conversion pipeline (read → convert → write)
 │   ├── file_utils.rs       # Path helpers / format whitelist
-│   ├── converters/         # MinerU engine integration (HTTP client + runtime management)
+│   ├── engine/             # Document conversion engine (currently a placeholder)
 │   └── models/             # Document / Task / Asset data structures
 ├── frontend/               # React + TypeScript frontend
 │   ├── src/
@@ -132,7 +132,7 @@ Test fixtures live in [`tests/fixtures/`](tests/).
 |-------|-----------|
 | Desktop framework | Tauri 2 |
 | Backend language | Rust 2021 edition |
-| Conversion engine | [MinerU](https://github.com/opendatalab/MinerU) 3.x (via `mineru-api`) |
+| Conversion engine | 未集成（MinerU 已移除，当前为占位实现） |
 | Async runtime | tokio |
 | Frontend framework | React 18 + TypeScript 5 |
 | Build tool | Vite 5 |
@@ -146,7 +146,7 @@ TODO: Add a LICENSE file (MIT or Apache-2.0 recommended).
 
 ## 🗺️ Roadmap
 
-- [x] Phase 1 MVP — single-file / batch conversion, MinerU engine integration
+- [x] Phase 1 MVP — single-file / batch conversion
 - [ ] Settings page (output format, concurrency, OCR toggle)
 - [ ] OCR image text recognition (model structure reserved in `src/models/ocr.rs`)
 - [ ] Drag-and-drop folder recursive conversion

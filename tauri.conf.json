@@ -25,9 +25,6 @@
   "bundle": {
     "active": true,
     "targets": "msi",
-    "resources": {
-      "bundle_extras/python": "python"
-    },
     "windows": {
       "nsis": {
         "installMode": "currentUser"

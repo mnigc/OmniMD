@@ -12,8 +12,7 @@ pub enum TaskStatus {
     Cancelled,
 }
 
-/// Task-level progress stages surfaced to the UI. MinerU's HTTP API reports
-/// task-level status only (no per-page progress), so stages are coarse.
+/// Task-level progress stages surfaced to the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ConversionStage {
     Queued,
@@ -59,15 +58,15 @@ impl OutputMode {
     }
 }
 
-/// User-facing parse quality. Mapped internally to MinerU `backend`/`method`.
+/// User-facing parse quality. Forwarded to the active recognition engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ParseQuality {
     /// Let the engine decide based on hardware and document type.
     Auto,
-    /// Speed first (MinerU `pipeline` backend; the only option on pure CPU).
+    /// Speed first.
     Quick,
-    /// Best fidelity (MinerU `vlm-engine` / `hybrid-engine`; requires GPU).
+    /// Best fidelity.
     High,
 }
 
@@ -83,15 +82,6 @@ impl ParseQuality {
             "quick" => ParseQuality::Quick,
             "high" => ParseQuality::High,
             _ => ParseQuality::Auto,
-        }
-    }
-
-    /// MinerU backend for this quality level.
-    pub fn mineru_backend(&self) -> &'static str {
-        match self {
-            ParseQuality::Quick => "pipeline",
-            ParseQuality::High => "vlm-engine",
-            ParseQuality::Auto => "hybrid-engine",
         }
     }
 }
@@ -233,5 +223,15 @@ impl ConversionTask {
             ai_ready_opts: AiReadyOpts::default(),
             parse_quality: ParseQuality::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_quality_is_auto() {
+        assert_eq!(ParseQuality::default(), ParseQuality::Auto);
     }
 }
