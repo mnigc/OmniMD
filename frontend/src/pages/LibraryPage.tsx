@@ -102,6 +102,14 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/// Display a document's path relative to the workspace root when possible —
+/// absolute drive paths are long and dominate narrow columns.
+function displayPath(abs: string, wsRoot?: string): string {
+  if (!wsRoot) return abs;
+  const norm = wsRoot.replace(/[\\/]+$/, "");
+  return abs.startsWith(norm) ? abs.slice(norm.length + 1) : abs;
+}
+
 export function LibraryPage() {
   const { t } = useI18n();
 
@@ -436,14 +444,19 @@ export function LibraryPage() {
           <button
             key={doc.id}
             className={cn(
-              "group w-full text-left rounded-md px-2.5 py-2 hover:bg-accent",
+              "group w-full text-left rounded-md px-2.5 py-2 hover:bg-accent overflow-hidden",
               selectedDoc?.id === doc.id && "bg-accent"
             )}
             onClick={() => openDocument(doc)}
           >
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
               <FileText size={14} className="shrink-0 text-muted-foreground" />
-              <span className="text-sm truncate flex-1">{doc.title}</span>
+              <span
+                className="text-sm truncate flex-1 min-w-0"
+                title={doc.title}
+              >
+                {doc.title}
+              </span>
               <Star
                 size={14}
                 className={cn(
@@ -458,8 +471,11 @@ export function LibraryPage() {
                 }}
               />
             </div>
-            <div className="mt-0.5 pl-5 text-xs text-muted-foreground truncate">
-              {doc.path}
+            <div
+              className="mt-0.5 pl-5 text-xs text-muted-foreground truncate"
+              title={doc.path}
+            >
+              {displayPath(doc.path, activeWs?.path)}
             </div>
           </button>
         ))}
@@ -483,29 +499,35 @@ export function LibraryPage() {
           <button
             key={hit.document.id}
             className={cn(
-              "w-full text-left rounded-md px-2.5 py-2 hover:bg-accent",
+              "w-full text-left rounded-md px-2.5 py-2 hover:bg-accent overflow-hidden",
               selectedDoc?.id === hit.document.id && "bg-accent"
             )}
             onClick={() => openHit(hit)}
           >
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
               <FileText size={14} className="shrink-0 text-muted-foreground" />
-              <span className="text-sm truncate flex-1">
+              <span
+                className="text-sm truncate flex-1 min-w-0"
+                title={hit.document.title}
+              >
                 {hit.document.title}
               </span>
               {hit.document.favorite && (
                 <Star size={13} className="shrink-0 text-amber-500 fill-amber-500" />
               )}
             </div>
-            <div className="mt-0.5 pl-5">
+            <div className="mt-0.5 pl-5 min-w-0">
               {hit.snippet ? (
                 <div
-                  className="text-xs text-muted-foreground line-clamp-3 [&_mark]:bg-yellow-300/60 [&_mark]:text-foreground [&_mark]:rounded-sm [&_mark]:px-0.5"
+                  className="text-xs text-muted-foreground line-clamp-3 [&_mark]:bg-yellow-300/60 [&_mark]:text-foreground [&_mark]:rounded-sm [&_mark]:px-0.5 break-words"
                   dangerouslySetInnerHTML={{ __html: hit.snippet }}
                 />
               ) : (
-                <div className="text-xs text-muted-foreground truncate">
-                  {hit.document.path}
+                <div
+                  className="text-xs text-muted-foreground truncate"
+                  title={hit.document.path}
+                >
+                  {displayPath(hit.document.path, activeWs?.path)}
                 </div>
               )}
             </div>
@@ -613,7 +635,7 @@ export function LibraryPage() {
       {/* Three columns */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left: folder tree */}
-        <aside className="w-60 shrink-0 border-r border-border flex flex-col">
+        <aside className="w-52 shrink-0 border-r border-border flex flex-col">
           <div className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wide shrink-0">
             {t("library.folders")}
           </div>

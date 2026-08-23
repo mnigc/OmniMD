@@ -174,6 +174,63 @@
   display: table-cell;
 }
 
+/* ---- Markdown reading view (Library / Convert preview) ---- */
+/* Tailwind preflight strips heading/paragraph margins; these restore a
+   comfortable reading rhythm for the markdown-body preview. */
+.markdown-body {
+  color: hsl(var(--foreground));
+  font-size: 0.9375rem;
+  line-height: 1.75;
+  overflow-wrap: break-word;
+}
+.markdown-body > :first-child {
+  margin-top: 0 !important;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-weight: 600;
+  line-height: 1.35;
+  color: hsl(var(--foreground));
+  margin: 1.6em 0 0.6em;
+}
+.markdown-body h1 {
+  font-size: 1.6rem;
+  margin-top: 0.2em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.markdown-body h2 {
+  font-size: 1.3rem;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.markdown-body h3 {
+  font-size: 1.12rem;
+}
+.markdown-body h4 {
+  font-size: 1rem;
+}
+.markdown-body p {
+  margin: 0.75em 0;
+}
+.markdown-body strong {
+  font-weight: 600;
+}
+.markdown-body del {
+  color: hsl(var(--muted-foreground));
+}
+.markdown-body li > p {
+  margin: 0.25em 0;
+}
+.markdown-body input[type="checkbox"] {
+  margin-right: 0.4em;
+  vertical-align: middle;
+}
+
 /* ---- Page transitions ---- */
 .page-transition {
   animation: page-fade-in 0.25s ease-out;
@@ -208,6 +265,9 @@
 }
 .cm-editor .cm-scroller {
   font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+.cm-editor .cm-content {
+  padding: 12px 16px;
 }
 .cm-editor .cm-gutters {
   background: transparent;

@@ -23,7 +23,8 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
   }
 
   return (
-    <div className="markdown-body">
+    <div className="markdown-body px-6 py-5 sm:px-8">
+      <div className="max-w-4xl mx-auto">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeRaw, rehypeSlug]}
@@ -94,10 +95,13 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
             );
           },
           ul({ children }) {
-            return <ul className="list-disc list-inside space-y-1 my-2">{children}</ul>;
+            return <ul className="list-disc pl-6 space-y-1 my-2">{children}</ul>;
           },
           ol({ children }) {
-            return <ol className="list-decimal list-inside space-y-1 my-2">{children}</ol>;
+            return <ol className="list-decimal pl-6 space-y-1 my-2">{children}</ol>;
+          },
+          li({ children }) {
+            return <li className="leading-relaxed marker:text-muted-foreground/70">{children}</li>;
           },
           blockquote({ children }) {
             return (
@@ -113,6 +117,7 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
       >
         {content}
       </ReactMarkdown>
+      </div>
     </div>
   );
 }
