@@ -153,7 +153,32 @@ impl WorkspaceDb {
         let conn = Connection::open(path)?;
         let db = Self { conn };
         db.init()?;
+        db.migrate_legacy_paths()?;
         Ok(db)
+    }
+
+    /// One-time cleanup for rows indexed before `normalize_path` stopped
+    /// storing Windows extended-length prefixes: `//?/D:/…` paths are not
+    /// valid for later `fs` calls (OS error 123) and must be rewritten to
+    /// plain drive paths. Idempotent — the WHERE clause matches nothing once
+    /// every row has been fixed.
+    fn migrate_legacy_paths(&self) -> rusqlite::Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, path FROM documents WHERE path LIKE '//?/%'")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        if rows.is_empty() {
+            return Ok(());
+        }
+        for (id, bad) in rows {
+            let fixed = strip_extended_prefix(&bad);
+            self.conn
+                .execute("UPDATE documents SET path = ?1 WHERE id = ?2", params![fixed, id])?;
+        }
+        Ok(())
     }
 
     /// Open the workspace database inside the platform app-data directory.
@@ -912,16 +937,33 @@ fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
 }
 
 /// Canonical, forward-slash normalized absolute path (stable lookup key).
+///
+/// `canonicalize()` on Windows returns extended-length paths
+/// (`\\?\D:\foo\bar.md`); that prefix must be stripped BEFORE converting to
+/// forward slashes — the mixed form `//?/D:/…` is not a valid Windows path
+/// and every later `fs` call fails with OS error 123 (ERROR_INVALID_NAME).
 fn normalize_path(p: &Path) -> String {
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else {
         std::env::current_dir().unwrap_or_default().join(p)
     };
-    abs.canonicalize()
-        .unwrap_or(abs)
-        .to_string_lossy()
-        .replace('\\', "/")
+    let canonical = abs.canonicalize().unwrap_or(abs);
+    strip_extended_prefix(&canonical.to_string_lossy())
+}
+
+/// Remove the Windows extended-length / UNC device prefix from a canonical
+/// path string (`\\?\C:\x` → `C:\x`, `\\?\UNC\srv\share` → `\\srv\share`),
+/// then normalize separators to forward slashes.
+fn strip_extended_prefix(path: &str) -> String {
+    let stripped = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    };
+    stripped.replace('\\', "/")
 }
 
 fn rel_of(path: &str, root: &str) -> Option<String> {
@@ -1386,6 +1428,16 @@ static GLOBAL_DB: OnceLock<Mutex<Option<WorkspaceDb>>> = OnceLock::new();
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn strips_windows_extended_prefix() {
+        assert_eq!(strip_extended_prefix(r"\\?\D:\notes\a.md"), "D:/notes/a.md");
+        assert_eq!(
+            strip_extended_prefix(r"\\?\UNC\server\share\a.md"),
+            "//server/share/a.md"
+        );
+        assert_eq!(strip_extended_prefix("D:/plain/path.md"), "D:/plain/path.md");
+    }
 
     #[test]
     fn cjk_bigram_tokenizes() {
