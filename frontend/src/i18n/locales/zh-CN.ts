@@ -18,6 +18,7 @@
       privacy: "隐私保护",
       free: "完全免费",
       batch: "批量转换",
+      fast: "毫秒级转换",
     },
     outputDir: "输出目录",
     outputDirPlaceholder: "输出目录（如 /home/user/output）",

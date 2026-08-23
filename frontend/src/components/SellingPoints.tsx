@@ -3,6 +3,7 @@
   Lock,
   Heart,
   Layers,
+  Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useI18n } from "../i18n";
@@ -18,6 +19,7 @@ const SELLING_POINTS: SellingPoint[] = [
   { icon: Lock, labelKey: "home.sellingPoints.privacy" },
   { icon: Heart, labelKey: "home.sellingPoints.free" },
   { icon: Layers, labelKey: "home.sellingPoints.batch" },
+  { icon: Zap, labelKey: "home.sellingPoints.fast" },
 ];
 
 export function SellingPoints({ className }: { className?: string }) {

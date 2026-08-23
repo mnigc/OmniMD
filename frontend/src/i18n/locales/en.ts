@@ -18,6 +18,7 @@
       privacy: "Privacy first",
       free: "Completely free",
       batch: "Batch conversion",
+      fast: "Millisecond conversion",
     },
     outputDir: "Output directory",
     outputDirPlaceholder: "Output directory (e.g. /home/user/output)",
