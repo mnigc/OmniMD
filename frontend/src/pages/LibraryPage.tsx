@@ -9,7 +9,6 @@ import {
   FileText,
   Folder,
   FolderOpen,
-  LibraryBig,
   Plus,
   RefreshCw,
   Save,
@@ -541,11 +540,6 @@ export function LibraryPage() {
     <div className="h-full flex flex-col">
       {/* Toolbar */}
       <div className="h-12 shrink-0 border-b border-border flex items-center gap-2 px-4">
-        <LibraryBig size={18} className="text-primary shrink-0" />
-        <span className="font-semibold text-sm shrink-0">
-          {t("library.title")}
-        </span>
-
         <select
           value={activeWs?.id ?? ""}
           onChange={(e) => handleSelectWorkspace(Number(e.target.value))}
@@ -587,17 +581,10 @@ export function LibraryPage() {
           size="icon"
           onClick={handleDeleteWorkspace}
           disabled={!activeWs}
-          title={t("library.deleteWorkspace")}
+          title={t("library.deleteWorkspaceHint")}
         >
           <Trash2 size={15} className="text-destructive" />
         </Button>
-
-        {scanResult && !scanning && (
-          <span className="hidden lg:inline text-xs text-muted-foreground shrink-0">
-            +{scanResult.indexed} ~{scanResult.updated} -{scanResult.removed}{" "}
-            · {scanResult.total}
-          </span>
-        )}
 
         <form
           onSubmit={handleSearch}

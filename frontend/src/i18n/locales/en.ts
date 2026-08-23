@@ -205,10 +205,9 @@
     newFileHint: "Please select a workspace first",
   },
   library: {
-    title: "Library",
     newWorkspace: "New",
     reindex: "Re-index",
-    deleteWorkspace: "Delete",
+    deleteWorkspace: "Remove workspace",
     deleteWorkspaceConfirm:
       "Delete this workspace? Only the index is removed; your source files are untouched.",
     selectWorkspace: "Select workspace…",
