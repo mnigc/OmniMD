@@ -41,6 +41,7 @@
     done: "Done",
     failed: "Failed",
     converting: "Converting...",
+    supportedFormats: "Supported: ",
     phase1Mvp: "Phase 1 MVP",
     startConversion: "Start Conversion",
     cancel: "Cancel",

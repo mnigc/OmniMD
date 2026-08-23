@@ -41,6 +41,7 @@
     done: "已完成",
     failed: "失败",
     converting: "转换中...",
+    supportedFormats: "支持格式：",
     phase1Mvp: "Phase 1 MVP",
     startConversion: "开始转换",
     cancel: "取消",

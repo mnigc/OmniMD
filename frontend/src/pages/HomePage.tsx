@@ -181,12 +181,18 @@ export function HomePage() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="flex-1 min-h-0 w-full max-w-5xl mx-auto flex flex-col gap-3 p-4">
-        {/* Hero — title + selling points on one line */}
-        <div className="flex items-center gap-x-4 gap-y-1 flex-wrap shrink-0">
+        {/* Hero — title / selling points / supported formats, stacked */}
+        <div className="shrink-0">
           <h1 className="text-lg font-semibold tracking-tight">
             {t("home.title")}
           </h1>
-          <SellingPoints className="contents" />
+          <div className="mt-1">
+            <SellingPoints />
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground/80 break-words">
+            {t("home.supportedFormats")}
+            {supportedFormats.map((f) => f.toUpperCase()).join(" / ")}
+          </p>
         </div>
 
         {/* Card 1: 添加文件 — horizontal, compact */}
