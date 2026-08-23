@@ -377,9 +377,14 @@ fn set_active_workspace(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     db_handle(&app)?.set_active_workspace_id(id)
 }
 
+/// Re-index a workspace. Heavy filesystem work runs on a blocking thread:
+/// sync commands execute on the main thread, so scanning a large root (an
+/// entire drive) there would freeze the whole UI.
 #[tauri::command]
-fn scan_workspace(app: tauri::AppHandle, id: i64) -> Result<ScanResultDto, String> {
-    db_handle(&app)?.scan_workspace(id)
+async fn scan_workspace(app: tauri::AppHandle, id: i64) -> Result<ScanResultDto, String> {
+    tauri::async_runtime::spawn_blocking(move || db::scan_workspace_background(&app, id))
+        .await
+        .map_err(|e| format!("后台扫描任务异常退出: {e}"))?
 }
 
 #[tauri::command]
@@ -425,13 +430,19 @@ fn record_document_open(app: tauri::AppHandle, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn search_documents(
+async fn search_documents(
     app: tauri::AppHandle,
     query: String,
     workspace_id: i64,
     limit: Option<i64>,
 ) -> Result<Vec<SearchHitDto>, String> {
-    db_handle(&app)?.search(&query, workspace_id, limit.unwrap_or(50))
+    // Also kept off the main thread: while a big scan transaction commits,
+    // the DB mutex can be briefly contended and must never block the UI.
+    tauri::async_runtime::spawn_blocking(move || {
+        db_handle(&app)?.search(&query, workspace_id, limit.unwrap_or(50))
+    })
+    .await
+    .map_err(|e| format!("检索任务异常退出: {e}"))?
 }
 
 #[tauri::command]

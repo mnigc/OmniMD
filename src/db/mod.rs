@@ -289,93 +289,89 @@ impl WorkspaceDb {
     /// Incrementally index every `.md` file under the workspace root.
     /// New files are inserted, changed files (mtime differs) re-indexed,
     /// records whose file disappeared are removed.
+    ///
+    /// Convenience wrapper used by tests; the app calls
+    /// [`scan_workspace_background`] instead, which keeps DB lock scopes short
+    /// so a huge root (an entire drive) cannot starve every other command.
     pub fn scan_workspace(&self, workspace_id: i64) -> Result<ScanResultDto, String> {
+        let (root, existing) = self.load_scan_baseline(workspace_id)?;
+        let plan = build_scan_plan(&root, &existing, |_| {})?;
+        self.apply_scan_plan(workspace_id, &existing, plan)
+    }
+
+    /// Phase A of a scan: load the workspace row and the current index
+    /// (path -> (id, mtime)). Callers must drop the DB handle right after so
+    /// the filesystem walk in phase B runs WITHOUT holding the global lock.
+    pub fn load_scan_baseline(
+        &self,
+        workspace_id: i64,
+    ) -> Result<(PathBuf, BTreeMap<String, (i64, i64)>), String> {
         let Some(ws) = self.get_workspace(workspace_id)? else {
             return Err("工作区不存在".to_string());
         };
-        let root = PathBuf::from(&ws.path);
+        let existing = self.indexed_docs(workspace_id)?;
+        Ok((PathBuf::from(&ws.path), existing))
+    }
 
-        let mut files = Vec::new();
-        collect_md_files(&root, &mut files);
-
-        let existing = self.indexed_docs(workspace_id)?; // normalized path -> (id, mtime)
-
+    /// Phase C of a scan: apply a prepared plan in ONE short transaction.
+    pub fn apply_scan_plan(
+        &self,
+        workspace_id: i64,
+        existing: &BTreeMap<String, (i64, i64)>,
+        plan: ScanPlan,
+    ) -> Result<ScanResultDto, String> {
         let mut result = ScanResultDto::default();
         let tx = self.conn.unchecked_transaction().map_err(err)?;
 
-        for file in &files {
-            let normalized = normalize_path(file);
-            let meta = match std::fs::metadata(file) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let mtime = mtime_ns(&meta);
-            let size = meta.len() as i64;
-
-            if let Some(&(id, old_mtime)) = existing.get(&normalized) {
-                if old_mtime == mtime {
-                    continue;
-                }
-                let content = match std::fs::read_to_string(file) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                let (title, source, tags, body) = extract_meta(&content, file);
-                tx.execute(
-                    "UPDATE documents SET title = ?1, file_size = ?2, mtime = ?3, source = ?4
-                     WHERE id = ?5",
-                    params![title, size, mtime, source, id],
-                )
-                .map_err(err)?;
-                tx.execute(
-                    "UPDATE documents_fts SET title = ?1, body = ?2, tags = ?3 WHERE rowid = ?4",
-                    params![
-                        cjk_bigram(&title),
-                        cjk_bigram(&body),
-                        cjk_bigram(&tags.join(" ")),
-                        id
-                    ],
-                )
-                .map_err(err)?;
-                result.updated += 1;
-            } else {
-                let content = match std::fs::read_to_string(file) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                let (title, source, tags, body) = extract_meta(&content, file);
-                tx.execute(
-                    "INSERT INTO documents
-                         (workspace_id, path, title, file_size, mtime, favorite, source, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)",
-                    params![workspace_id, normalized, title, size, mtime, source, now_rfc3339()],
-                )
-                .map_err(err)?;
-                let id = tx.last_insert_rowid();
-                tx.execute(
-                    "INSERT INTO documents_fts (rowid, title, body, tags) VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        id,
-                        cjk_bigram(&title),
-                        cjk_bigram(&body),
-                        cjk_bigram(&tags.join(" "))
-                    ],
-                )
-                .map_err(err)?;
-                result.indexed += 1;
-            }
+        for u in &plan.updates {
+            tx.execute(
+                "UPDATE documents SET title = ?1, file_size = ?2, mtime = ?3, source = ?4
+                 WHERE id = ?5",
+                params![u.title, u.size, u.mtime, u.source, u.id],
+            )
+            .map_err(err)?;
+            tx.execute(
+                "UPDATE documents_fts SET title = ?1, body = ?2, tags = ?3 WHERE rowid = ?4",
+                params![u.title_bigram, u.body_bigram, u.tags_bigram, u.id],
+            )
+            .map_err(err)?;
+            result.updated += 1;
         }
 
-        for (normalized, (id, _)) in &existing {
-            if !Path::new(normalized).exists() {
-                tx.execute("DELETE FROM documents_fts WHERE rowid = ?1", params![id])
-                    .map_err(err)?;
-                tx.execute("DELETE FROM documents WHERE id = ?1", params![id])
-                    .map_err(err)?;
-                result.removed += 1;
-            }
+        for d in &plan.inserts {
+            tx.execute(
+                "INSERT INTO documents
+                     (workspace_id, path, title, file_size, mtime, favorite, source, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)",
+                params![
+                    workspace_id,
+                    d.normalized,
+                    d.title,
+                    d.size,
+                    d.mtime,
+                    d.source,
+                    now_rfc3339()
+                ],
+            )
+            .map_err(err)?;
+            let id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO documents_fts (rowid, title, body, tags) VALUES (?1, ?2, ?3, ?4)",
+                params![id, d.title_bigram, d.body_bigram, d.tags_bigram],
+            )
+            .map_err(err)?;
+            result.indexed += 1;
         }
 
+        for id in &plan.removals {
+            tx.execute("DELETE FROM documents_fts WHERE rowid = ?1", params![id])
+                .map_err(err)?;
+            tx.execute("DELETE FROM documents WHERE id = ?1", params![id])
+                .map_err(err)?;
+            result.removed += 1;
+        }
+
+        let _ = existing;
         tx.commit().map_err(err)?;
         result.total = self.doc_count(workspace_id)?;
         Ok(result)
@@ -960,27 +956,245 @@ fn normalize_folder(folder: Option<&str>) -> String {
 }
 
 /// Recursively collect every `*.md` file, skipping dot-directories.
-fn collect_md_files(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Safety caps so a pathological root (e.g. an entire drive) cannot make the
+/// scan run unbounded.
+const SCAN_MAX_FILES: usize = 100_000;
+const SCAN_MAX_DEPTH: u32 = 48;
+/// Files larger than this are indexed by name only; their body is not
+/// bigram-tokenized (reading + tokenizing hundreds of MB would stall a pass).
+const SCAN_MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Directory names that are never worth indexing. Compared lowercased; the
+/// dot-prefix rule handles VCS/hidden dirs separately.
+const SCAN_SKIP_DIRS: &[&str] = &[
+    "$recycle.bin",
+    "system volume information",
+    "windows",
+    "program files",
+    "program files (x86)",
+    "programdata",
+    "appdata",
+    "node_modules",
+    "target",
+    "vendor",
+    "__pycache__",
+];
+
+fn collect_md_files(dir: &Path, depth: u32, budget: &mut usize, out: &mut Vec<PathBuf>) {
+    if *budget == 0 || depth > SCAN_MAX_DEPTH {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        // file_type() does NOT follow symlinks/junctions, so reparse-point
+        // cycles (common on Windows) can never recurse infinitely.
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_symlink() {
+            continue;
+        }
         let path = entry.path();
-        if path.is_dir() {
+        if ft.is_dir() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with('.') {
                 continue;
             }
-            collect_md_files(&path, out);
-        } else if path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("md"))
-            .unwrap_or(false)
+            if SCAN_SKIP_DIRS.iter().any(|s| name.eq_ignore_ascii_case(s)) {
+                continue;
+            }
+            collect_md_files(&path, depth + 1, budget, out);
+        } else if ft.is_file()
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
         {
             out.push(path);
+            *budget -= 1;
         }
     }
+}
+
+/// Prepared diff between the index and the filesystem, built WITHOUT holding
+/// the DB lock; [`WorkspaceDb::apply_scan_plan`] flushes it in one transaction.
+#[derive(Default)]
+pub struct ScanPlan {
+    updates: Vec<ScanUpdate>,
+    inserts: Vec<ScanInsert>,
+    removals: Vec<i64>,
+}
+
+struct ScanUpdate {
+    id: i64,
+    title: String,
+    size: i64,
+    mtime: i64,
+    source: Option<String>,
+    title_bigram: String,
+    body_bigram: String,
+    tags_bigram: String,
+}
+
+struct ScanInsert {
+    normalized: String,
+    title: String,
+    size: i64,
+    mtime: i64,
+    source: Option<String>,
+    title_bigram: String,
+    body_bigram: String,
+    tags_bigram: String,
+}
+
+/// Phase B of a scan: walk the workspace root and read ONLY new/changed
+/// files. Runs without the DB lock — this is the slow part (filesystem +
+/// content + bigram tokenization) and must never starve other commands.
+fn build_scan_plan(
+    root: &Path,
+    existing: &BTreeMap<String, (i64, i64)>,
+    mut on_progress: impl FnMut(usize),
+) -> Result<ScanPlan, String> {
+    let mut files = Vec::new();
+    let mut budget = SCAN_MAX_FILES;
+    collect_md_files(root, 0, &mut budget, &mut files);
+
+    let mut plan = ScanPlan::default();
+    for (i, file) in files.iter().enumerate() {
+        if i % 500 == 0 {
+            on_progress(i);
+        }
+        let normalized = normalize_path(file);
+        let Ok(meta) = std::fs::metadata(file) else { continue };
+        let mtime = mtime_ns(&meta);
+        let size = meta.len() as i64;
+
+        if let Some(&(id, old_mtime)) = existing.get(&normalized) {
+            if old_mtime == mtime {
+                continue;
+            }
+            // Oversized files keep their old body; only name-level metadata
+            // is refreshed.
+            if size as u64 > SCAN_MAX_BODY_BYTES {
+                let title = file_stem_title(file);
+                plan.updates.push(ScanUpdate {
+                    id,
+                    title,
+                    size,
+                    mtime,
+                    source: None,
+                    title_bigram: String::new(),
+                    body_bigram: String::new(),
+                    tags_bigram: String::new(),
+                });
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(file) else { continue };
+            let (title, source, tags, body) = extract_meta(&content, file);
+            let title_bigram = cjk_bigram(&title);
+            let body_bigram = cjk_bigram(&body);
+            let tags_bigram = cjk_bigram(&tags.join(" "));
+            plan.updates.push(ScanUpdate {
+                id,
+                title,
+                size,
+                mtime,
+                source,
+                title_bigram,
+                body_bigram,
+                tags_bigram,
+            });
+        } else {
+            // Oversized new files: index by filename so they are still
+            // listed/browsable, just not full-text searchable.
+            let (title, source, tags, body) = if size as u64 > SCAN_MAX_BODY_BYTES {
+                (file_stem_title(file), None, Vec::new(), String::new())
+            } else {
+                match std::fs::read_to_string(file) {
+                    Ok(c) => extract_meta(&c, file),
+                    Err(_) => continue,
+                }
+            };
+            let title_bigram = cjk_bigram(&title);
+            let body_bigram = cjk_bigram(&body);
+            let tags_bigram = cjk_bigram(&tags.join(" "));
+            plan.inserts.push(ScanInsert {
+                normalized,
+                title,
+                size,
+                mtime,
+                source,
+                title_bigram,
+                body_bigram,
+                tags_bigram,
+            });
+        }
+    }
+
+    // Removals are judged against the disk (not this walk), so a capped walk
+    // never deletes records it simply did not reach.
+    for (normalized, (id, _)) in existing {
+        if !Path::new(normalized).exists() {
+            plan.removals.push(*id);
+        }
+    }
+    Ok(plan)
+}
+
+fn file_stem_title(path: &Path) -> String {
+    path.file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "未命名文档".to_string())
+}
+
+/// Full scan orchestrated with SHORT DB lock scopes:
+/// A) lock → load baseline, release;  B) no lock → walk/read/build plan;
+/// C) lock → apply in one transaction. Progress is emitted on
+/// `workspace-scan-progress` every few hundred entries so a huge root cannot
+/// make the app look dead even though the command returns only at the end.
+pub fn scan_workspace_background(
+    app: &tauri::AppHandle,
+    workspace_id: i64,
+) -> Result<ScanResultDto, String> {
+    use tauri::Emitter;
+
+    // Phase A — short lock.
+    let (root, existing) = {
+        let handle = db(app)?;
+        handle.load_scan_baseline(workspace_id)?
+    };
+
+    // Phase B — NO lock. The guard above is already dropped here.
+    let app_for_cb = app.clone();
+    let plan = build_scan_plan(&root, &existing, move |processed| {
+        let _ = app_for_cb.emit(
+            "workspace-scan-progress",
+            serde_json::json!({ "workspaceId": workspace_id, "processed": processed }),
+        );
+    })?;
+
+    // Phase C — short lock again.
+    let result = {
+        let handle = db(app)?;
+        handle.apply_scan_plan(workspace_id, &existing, plan)?
+    };
+
+    let _ = app.emit(
+        "workspace-scan-progress",
+        serde_json::json!({
+            "workspaceId": workspace_id,
+            "done": true,
+            "indexed": result.indexed,
+            "updated": result.updated,
+            "removed": result.removed,
+            "total": result.total,
+        }),
+    );
+    Ok(result)
 }
 
 /// Parse light frontmatter (title / source / tags) out of a markdown file.
