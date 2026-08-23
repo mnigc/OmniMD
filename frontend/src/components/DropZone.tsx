@@ -183,7 +183,7 @@ const dropHandledNatively = useRef(false);
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       className={cn(
-        "group relative flex flex-col items-center gap-3 px-5 py-4 rounded-xl border-2 border-dashed",
+        "group relative flex items-center gap-3.5 px-4 py-3 rounded-xl border-2 border-dashed",
         "transition-all duration-300 ease-out",
         className,
         isDragging
@@ -193,42 +193,41 @@ const dropHandledNatively = useRef(false);
             : "border-border/70 bg-muted/20 hover:border-primary/50 hover:bg-muted/40 hover:shadow-md hover:shadow-primary/5"
       )}
     >
-      <div className="flex items-center gap-3">
-        <div
-          className={cn(
-            "p-3 rounded-xl shrink-0 transition-all duration-300",
-            isDragging
-              ? "bg-primary/15 text-primary scale-110"
-              : "bg-muted/60 text-muted-foreground group-hover:text-primary group-hover:bg-primary/10"
-          )}
-        >
-          {isDragging ? (
-            isFolderDrag ? (
-              <FolderOpen size={24} />
-            ) : (
-              <Upload size={24} className="animate-bounce" />
-            )
+      <div
+        className={cn(
+          "p-2.5 rounded-lg shrink-0 transition-all duration-300",
+          isDragging
+            ? "bg-primary/15 text-primary scale-110"
+            : "bg-muted/60 text-muted-foreground group-hover:text-primary group-hover:bg-primary/10"
+        )}
+      >
+        {isDragging ? (
+          isFolderDrag ? (
+            <FolderOpen size={20} />
           ) : (
-            <FileUp size={24} />
-          )}
-        </div>
-        <div>
-          <p className="text-sm font-medium">
-            {isDragging
-              ? isFolderDrag
-                ? t("dropzone.folderDetected")
-                : t("dropzone.releaseToConvert")
-              : t("dropzone.dropFilesOrFolder")}
-          </p>
-          {disabled && (
-            <p className="text-xs mt-1 text-destructive">
-              {t("dropzone.disabledHint")}
-            </p>
-          )}
-        </div>
+            <Upload size={20} className="animate-bounce" />
+          )
+        ) : (
+          <FileUp size={20} />
+        )}
       </div>
 
-      <div className="flex items-center gap-2 shrink-0 justify-center">
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate">
+          {isDragging
+            ? isFolderDrag
+              ? t("dropzone.folderDetected")
+              : t("dropzone.releaseToConvert")
+            : t("dropzone.dropFilesOrFolder")}
+        </p>
+        {disabled && (
+          <p className="text-xs mt-0.5 text-destructive truncate">
+            {t("dropzone.disabledHint")}
+          </p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 shrink-0">
         <Button
           size="sm"
           variant="outline"
@@ -238,7 +237,7 @@ const dropHandledNatively = useRef(false);
           }}
           className="transition-all duration-200"
         >
-          <FileUp size={14} />
+          <FileUp size={13} />
           {t("home.addFiles")}
         </Button>
         {onFolder && (
@@ -251,7 +250,7 @@ const dropHandledNatively = useRef(false);
             }}
             className="transition-all duration-200"
           >
-            <FolderOpen size={14} />
+            <FolderOpen size={13} />
             {t("home.chooseFolder")}
           </Button>
         )}
