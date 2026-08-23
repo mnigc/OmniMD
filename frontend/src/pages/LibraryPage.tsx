@@ -78,6 +78,12 @@ function mapTree(
 }
 
 function joinPath(root: string, rel: string): string {
+  // Document paths are stored ABSOLUTE (normalized by the backend); joining
+  // a root onto them would produce "D:/D:/…" which Windows rejects with
+  // os error 123. Only prefix genuinely relative fragments.
+  if (/^[a-zA-Z]:[\\/]/.test(rel) || rel.startsWith("//") || rel.startsWith("\\\\")) {
+    return rel;
+  }
   const rootNorm = root.replace(/[\\/]+$/, "");
   const relNorm = rel.replace(/^[\\/]+/, "");
   return `${rootNorm}/${relNorm}`;
