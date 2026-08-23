@@ -12,7 +12,7 @@
   },
   home: {
     title: "Turn Any File into AI-Ready Markdown",
-    subtitle: "PDF · Word · PowerPoint · Excel · EPUB · HTML · URL",
+    subtitle: "PDF · Word · PPT · Excel · EPUB · RTF · ODT · CSV · URL",
     sellingPoints: {
       local: "Local processing",
       privacy: "Privacy first",
@@ -125,13 +125,13 @@
     releaseToConvert: "Release to start conversion",
     dropFilesOrFolder: "Drop files or folder here",
     orClick: "or click to browse",
-    supported: "Supported: DOCX, PDF, PPTX, XLSX, EPUB, CSV, TXT, HTML, RTF, ODT...",
+    supported: "Supported: DOCX, PDF, PPTX, XLSX / XLS, EPUB, CSV, RTF, ODT...",
     selected: "selected",
     files: "files",
     folderDetected: "Folder detected",
-    localLimits: "Local limits: ≤200MB per file · ≤200 pages · PDF/Images/Word/PPT/Excel",
+    localLimits: "Local limits: single file ≤200MB · Word / PPT / Excel / PDF (text-based) / EPUB / RTF / OpenDocument / CSV",
     disabledHint:
-      "Local file conversion is unavailable until a parsing engine is connected.",
+      "Conversion is temporarily unavailable.",
   },
   taskStatus: {
     pending: "Pending",
@@ -163,9 +163,9 @@
     },
     parseQualityDesc:
       "Auto lets the engine pick the best approach; Quick prioritizes speed; High prioritizes fidelity.",
-    engineNotice: "Recognition engine",
+    engineNotice: "Conversion engine",
     engineNoticeDesc:
-      "No document parsing engine is integrated yet. Local file conversion is unavailable until an engine is connected in Settings.",
+      "Powered by AnyDoc — a local, pure-Rust engine that converts Word / PowerPoint / Excel / OpenDocument / RTF / EPUB / CSV and text-based PDFs in milliseconds. Scanned or image-only PDFs are not supported (no OCR).",
     outputFormat: "Output Format",
     defaultOutputMode: "Default output mode",
     defaultOutputDir: "Default output directory",

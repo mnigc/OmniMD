@@ -137,7 +137,7 @@ cd frontend && pnpm build
 |----|------|
 | 桌面框架 | Tauri 2 |
 | 后端语言 | Rust 2021 edition |
-| 转换引擎 | 未集成（MinerU 已移除，当前为占位实现） |
+| 转换引擎 | [AnyDoc](https://github.com/firecrawl/anydoc)（本地纯 Rust 引擎，MIT） |
 | 异步运行时 | tokio |
 | 前端框架 | React 18 + TypeScript 5 |
 | 构建工具 | Vite 5 |

@@ -16,7 +16,7 @@ use db::{
     db as db_handle, DocumentDto, FolderDto, ScanResultDto, SearchHitDto, WorkspaceDto,
 };
 use engine::batch_queue::BatchQueue;
-use engine::stub_engine::StubEngine;
+use engine::anydoc_engine::AnyDocEngine;
 use engine::model_manager::ModelManager;
 use engine::DocumentEngine;
 use models::ocr::{Cancellation, ProgressCallback};
@@ -120,11 +120,10 @@ impl Default for AppState {
 }
 
 impl AppState {
-    /// Create the document conversion engine. The recognition engine was
-    /// removed (MinerU); a placeholder is returned until a real engine is
-    /// integrated.
+    /// Create the document conversion engine: the local AnyDoc engine
+    /// (pure Rust, no ML models, no external services).
     fn create_engine(&self) -> Arc<dyn DocumentEngine> {
-        Arc::new(StubEngine::new())
+        Arc::new(AnyDocEngine::new())
     }
 
     /// Lazily create and cache the engine for the batch queue.
@@ -607,7 +606,7 @@ fn get_supported_formats() -> Vec<String> {
 #[tauri::command]
 fn get_converter_info() -> String {
     let info = ConverterInfo {
-        name: "none".to_string(),
+        name: "AnyDoc".to_string(),
         supported_formats: get_supported_formats(),
     };
     serde_json::to_string(&info).unwrap_or_default()

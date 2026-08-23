@@ -12,7 +12,7 @@
   },
   home: {
     title: "把任何文件变成 AI 可用的 Markdown",
-    subtitle: "PDF · Word · PowerPoint · Excel · EPUB · HTML · URL",
+    subtitle: "PDF · Word · PPT · Excel · EPUB · RTF · ODT · CSV · URL",
     sellingPoints: {
       local: "本地处理",
       privacy: "隐私保护",
@@ -125,12 +125,12 @@
     releaseToConvert: "释放以开始转换",
     dropFilesOrFolder: "拖入文件或文件夹",
     orClick: "或点击选择",
-    supported: "支持：DOCX、PDF、PPTX、XLSX、EPUB、CSV、TXT、HTML、RTF、ODT...",
+    supported: "支持：DOCX、PDF、PPTX、XLSX / XLS、EPUB、CSV、RTF、ODT...",
     selected: "已选择",
     files: "个文件",
     folderDetected: "检测到文件夹",
-    localLimits: "本地文件转换限制：单文件 ≤200MB · ≤200 页 · 支持 PDF/图片/Word/PPT/Excel",
-    disabledHint: "尚未接入解析引擎，本地文件转换暂不可用。",
+    localLimits: "本地转换限制：单文件 ≤200MB · 支持 Word / PPT / Excel / 文本型 PDF / EPUB / RTF / OpenDocument / CSV",
+    disabledHint: "转换功能暂不可用。",
   },
   taskStatus: {
     pending: "等待中",
@@ -161,8 +161,9 @@
       high: "高质量",
     },
     parseQualityDesc: "自动模式由引擎自行选择最佳方案；快速模式优先速度；高质量模式优先保真度。",
-    engineNotice: "识别引擎",
-    engineNoticeDesc: "尚未集成任何文档解析引擎，接入引擎前本地文件转换不可用。",
+    engineNotice: "转换引擎",
+    engineNoticeDesc:
+      "已集成 AnyDoc 本地引擎（纯 Rust，毫秒级转换），支持 Word / PPT / Excel / OpenDocument / RTF / EPUB / CSV 及文本型 PDF。扫描版或图片型 PDF 暂不支持（无 OCR）。",
     outputFormat: "输出格式",
     defaultOutputMode: "默认输出模式",
     defaultOutputDir: "默认输出目录",

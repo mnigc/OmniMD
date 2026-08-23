@@ -88,7 +88,7 @@ OmniMD/
 │   ├── lib.rs              # Tauri command registration (frontend API)
 │   ├── pipeline.rs         # Conversion pipeline (read → convert → write)
 │   ├── file_utils.rs       # Path helpers / format whitelist
-│   ├── engine/             # Document conversion engine (currently a placeholder)
+│   ├── engine/             # Document conversion engine (AnyDoc integration)
 │   └── models/             # Document / Task / Asset data structures
 ├── frontend/               # React + TypeScript frontend
 │   ├── src/
@@ -132,7 +132,7 @@ Test fixtures live in [`tests/fixtures/`](tests/).
 |-------|-----------|
 | Desktop framework | Tauri 2 |
 | Backend language | Rust 2021 edition |
-| Conversion engine | 未集成（MinerU 已移除，当前为占位实现） |
+| Conversion engine | [AnyDoc](https://github.com/firecrawl/anydoc) (local pure-Rust engine, MIT) |
 | Async runtime | tokio |
 | Frontend framework | React 18 + TypeScript 5 |
 | Build tool | Vite 5 |

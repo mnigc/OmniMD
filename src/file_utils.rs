@@ -7,15 +7,17 @@ pub enum InputType {
     Url,
 }
 
-// M0 (2026-08-16): verified against MinerU 3.4.5 — `.xls` is rejected with
-// `400 Unsupported file type: xls` (only `.xlsx` is supported via openpyxl),
-// so `.xls` is intentionally excluded from the supported list.
+// Aligned with the AnyDoc engine's supported formats. Detection is
+// content-based; the extension is only a fallback for signature-less
+// formats (CSV). Plain text/HTML and images are not supported (no OCR).
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "pdf", "docx", "doc", "pptx", "ppt", "xlsx", "epub", "csv", "txt", "html", "htm",
-    "odt", "ods", "odp", "rtf", "png", "jpg", "jpeg", "tiff", "tif", "bmp",
+    "pdf",
+    "doc", "docx", "docm",
+    "ppt", "pps", "pot", "pptx", "pptm", "ppsx", "ppsm",
+    "xls", "xlsx", "xlsm", "xlsb",
+    "odt", "ods", "odp",
+    "rtf", "epub", "csv",
 ];
-
-const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tiff", "tif", "bmp"];
 
 pub fn detect_input_type(path: &str) -> InputType {
     if path.starts_with("http://") || path.starts_with("https://") {
@@ -183,15 +185,4 @@ pub fn get_supported_extensions() -> Vec<String> {
 
 pub fn get_supported_extensions_ref() -> &'static [&'static str] {
     SUPPORTED_EXTENSIONS
-}
-
-pub fn is_image_file(path: &str) -> bool {
-    if let Some(ext) = Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-    {
-        IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str())
-    } else {
-        false
-    }
 }

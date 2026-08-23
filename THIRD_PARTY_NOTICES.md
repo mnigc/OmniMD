@@ -2,6 +2,13 @@
 
 This project incorporates components from the following third-party projects.
 
+## anydoc
+
+- **Source**: Firecrawl / anydoc
+- **License**: MIT
+- **Description**: Local document-to-Markdown conversion engine (Word, PowerPoint, Excel, OpenDocument, RTF, EPUB, CSV, PDF), linked as a Rust library. Text-based PDFs convert through its bundled pdf-inspector component.
+- **Website**: https://github.com/firecrawl/anydoc
+
 ## Tauri
 
 - **License**: Apache-2.0

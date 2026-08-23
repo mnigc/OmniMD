@@ -1,13 +1,12 @@
-pub mod stub_engine;
+pub mod anydoc_engine;
 pub mod batch_queue;
 pub mod model_manager;
 
 use crate::models::ocr::{Cancellation, ProgressCallback};
 use crate::models::task::{ConversionError, ConversionResult, ConversionTask};
 
-/// Abstract document-to-markdown engine. OmniMD consumes documents through this
-/// trait. The recognition engine was removed (MinerU); `stub_engine` provides a
-/// no-op placeholder so the app still builds until a real engine is integrated.
+/// Abstract document-to-markdown engine. OmniMD consumes documents through
+/// this trait; `anydoc_engine` is the local implementation (pure Rust, no ML).
 #[async_trait::async_trait]
 pub trait DocumentEngine: Send + Sync {
     fn name(&self) -> &str;
