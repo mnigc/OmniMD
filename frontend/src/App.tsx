@@ -183,7 +183,7 @@ export function App() {
             OmniMD - Anything to Markdown
           </span>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex h-full items-stretch">
           <WindowControls />
         </div>
       </header>
