@@ -1,11 +1,9 @@
 ﻿pub mod document;
-pub mod model;
-pub mod ocr;
 pub mod task;
 
 pub use document::{Block, Document, Asset};
 pub use task::{
-    ConversionTask, ConversionError, ConversionResult, ConversionStats, AiReadyOpts,
-    TaskStatus, ConversionStage, ErrorCode, OutputMode, ParseQuality,
+    ConversionTask, ConversionError, ConversionResult, ConversionStats,
+    Cancellation, ProgressCallback, TaskStatus, ConversionStage, ErrorCode,
     BatchTaskDto, BatchSummaryDto, BatchFilter,
 };

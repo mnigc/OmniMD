@@ -79,7 +79,6 @@ export function TaskItem({
       ? fileName.slice(fileName.lastIndexOf(".") + 1).toUpperCase()
       : "";
   const statusLabel = t(statusKey[task.status] || "taskStatus.pending");
-  const modeLabel = task.outputMode ? t(`outputMode.${task.outputMode}`) : "";
 
   const progressWidth =
     task.status === "Completed"
@@ -138,11 +137,6 @@ export function TaskItem({
           {ext && (
             <span className="text-xs px-1.5 py-0.5 bg-muted text-muted-foreground rounded shrink-0">
               {ext}
-            </span>
-          )}
-          {modeLabel && (
-            <span className="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded shrink-0">
-              {modeLabel}
             </span>
           )}
           <StatusBadge status={task.status} label={statusLabel} />

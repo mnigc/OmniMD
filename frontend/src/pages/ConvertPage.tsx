@@ -25,7 +25,6 @@ import { useTaskStore } from "../store/useTaskStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useI18n } from "../i18n";
 import { Button } from "../components/ui/button";
-import { Separator } from "../components/ui/separator";
 import { convertFile, writeTextFile, openFolder } from "../api/tauriApi";
 import type { ConversionStats, ErrorDto } from "../types";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -261,7 +260,6 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
     setCurrentTask,
     previewSource,
   } = useTaskStore();
-  const { outputMode, buildAiReadyOpts } = useSettingsStore();
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [markdown, setMarkdown] = useState("");
   const [reconverting, setReconverting] = useState(false);
@@ -554,12 +552,7 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
               try {
                 const sourcePath = currentTask.sourcePath;
                 const dir = await resolve(await dirname(currentTask.outputPath));
-                const result = await convertFile(
-                  sourcePath,
-                  dir,
-                  outputMode,
-                  buildAiReadyOpts(),
-                );
+                const result = await convertFile(sourcePath, dir);
                 const fileName = sourcePath.split(/[\\/]/).pop() || "output";
                 const outputName = fileName.replace(/\.[^.]+$/, ".md");
                 const outputPath = `${dir}/${outputName}`;
@@ -569,7 +562,6 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                     sourcePath: sourcePath,
                     outputDir: dir,
                     outputPath,
-                    outputMode,
                     status: "Completed",
                     progress: 1,
                     stage: "Saving",
@@ -594,29 +586,6 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
             {t("convert.reconvert")}
           </Button>
         )}
-
-        <Separator orientation="vertical" className="h-6 mx-1" />
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              className="ml-auto"
-              variant="outline"
-              size="icon"
-              onClick={() => {
-                showToast(
-                  `${t("toast.aiReadyTip")}`,
-                  4000,
-                );
-              }}
-            >
-              <span className="text-xs font-bold">?</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" align="end" className="max-w-xs text-xs">
-            <p>{t("toast.aiReadyTip")}</p>
-          </TooltipContent>
-        </Tooltip>
       </div>
     </div>
   );

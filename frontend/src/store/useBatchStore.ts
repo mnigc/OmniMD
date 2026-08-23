@@ -27,7 +27,7 @@ interface BatchStore {
   setConcurrency: (n: number) => void;
   refreshTasks: () => Promise<void>;
   refreshSummary: () => Promise<void>;
-  enqueue: (sourcePath: string, outputPath: string, outputMode?: string, parseQuality?: string) => Promise<string | null>;
+  enqueue: (sourcePath: string, outputPath: string) => Promise<string | null>;
   start: () => Promise<void>;
   pauseTask: (taskId: string) => Promise<void>;
   resumeTask: (taskId: string) => Promise<void>;
@@ -68,9 +68,9 @@ export const useBatchStore = create<BatchStore>((set, get) => ({
     }
   },
 
-  enqueue: async (sourcePath, outputPath, outputMode, parseQuality) => {
+  enqueue: async (sourcePath, outputPath) => {
     try {
-      const id = await batchEnqueue(sourcePath, outputPath, outputMode as any, parseQuality as any);
+      const id = await batchEnqueue(sourcePath, outputPath);
       return id;
     } catch (e: any) {
       showToast(e?.message || "Failed to queue file", 3000);

@@ -65,7 +65,7 @@ export function App() {
             const fileName = file.split(/[\\/]/).pop() || "output";
             const outputName = fileName.replace(/\.[^.]+$/, ".md");
             const outputPath = `${outputDir}/${outputName}`;
-            await batchStore.enqueue(file, outputPath, settingsStore.outputMode, settingsStore.parseQuality);
+            await batchStore.enqueue(file, outputPath);
           }
           await batchStore.refreshTasks();
           await batchStore.refreshSummary();

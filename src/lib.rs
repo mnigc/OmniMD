@@ -2,7 +2,6 @@ pub mod models;
 pub mod engine;
 pub mod file_utils;
 pub mod markdown_pipeline;
-pub mod web_extractor;
 pub mod db;
 
 use std::sync::Mutex;
@@ -19,10 +18,9 @@ use engine::batch_queue::BatchQueue;
 use engine::anydoc_engine::AnyDocEngine;
 use engine::model_manager::ModelManager;
 use engine::DocumentEngine;
-use models::ocr::{Cancellation, ProgressCallback};
 use models::task::{
-    AiReadyOpts, BatchSummaryDto, BatchTaskDto, ConversionError, ConversionResult, ConversionTask,
-    ErrorCode, TaskStatus, OutputMode, ParseQuality,
+    BatchSummaryDto, BatchTaskDto, Cancellation, ConversionError, ConversionResult,
+    ConversionTask, ErrorCode, ProgressCallback, TaskStatus,
 };
 use models::ConversionStage;
 use serde::{Deserialize, Serialize};
@@ -35,24 +33,6 @@ pub struct ConversionStatsDto {
     pub image_count: usize,
     pub table_count: usize,
     pub word_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AiReadyOptsDto {
-    #[serde(default)]
-    pub gen_toc: bool,
-    #[serde(default)]
-    pub gen_meta: bool,
-}
-
-impl From<&AiReadyOptsDto> for AiReadyOpts {
-    fn from(dto: &AiReadyOptsDto) -> Self {
-        AiReadyOpts {
-            gen_toc: dto.gen_toc,
-            gen_meta: dto.gen_meta,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,27 +179,12 @@ async fn convert_file(
     app: tauri::AppHandle,
     source_path: String,
     output_dir: String,
-    output_mode: Option<String>,
-    ai_ready_opts: Option<AiReadyOptsDto>,
-    parse_quality: Option<String>,
     client_task_id: Option<String>,
 ) -> Result<ConversionResultDto, String> {
-    info!(
-        "convert_file: {} -> {} (mode={:?}, quality={:?})",
-        source_path, output_dir, output_mode, parse_quality
-    );
-
-    let mode = output_mode
-        .as_deref()
-        .map(OutputMode::from_str)
-        .unwrap_or_default();
-    let quality = parse_quality
-        .as_deref()
-        .map(ParseQuality::from_str)
-        .unwrap_or_default();
+    info!("convert_file: {} -> {}", source_path, output_dir);
 
     let output_path = file_utils::get_output_path(&source_path, &output_dir);
-    let mut task = ConversionTask::with_mode(&source_path, &output_path, mode);
+    let mut task = ConversionTask::new(&source_path, &output_path);
     // When the frontend supplies its own task id (used for the session list and
     // cancellation), use it so progress/status events can be correlated.
     if let Some(id) = client_task_id {
@@ -227,10 +192,6 @@ async fn convert_file(
             task.id = id;
         }
     }
-    if let Some(dto) = &ai_ready_opts {
-        task.ai_ready_opts = AiReadyOpts::from(dto);
-    }
-    task.parse_quality = quality;
     task.status = TaskStatus::Processing;
     task.stage = ConversionStage::Queued;
     task.progress = 0.05;
@@ -445,127 +406,6 @@ async fn search_documents(
     .map_err(|e| format!("检索任务异常退出: {e}"))?
 }
 
-#[tauri::command]
-async fn fetch_url(
-    app: tauri::AppHandle,
-    url: String,
-    output_dir: String,
-    output_mode: Option<String>,
-    ai_ready_opts: Option<AiReadyOptsDto>,
-    client_task_id: Option<String>,
-) -> Result<ConversionResultDto, String> {
-    info!("fetch_url: {} -> {} (mode={:?})", url, output_dir, output_mode);
-
-    let mode = output_mode
-        .as_deref()
-        .map(OutputMode::from_str)
-        .unwrap_or_default();
-
-    let filename = web_extractor::derive_filename(&url, "");
-    let output_path = format!("{}/{}.md", output_dir.trim_end_matches('/'), filename);
-    let mut task = ConversionTask::with_mode(&url, &output_path, mode.clone());
-    if let Some(id) = client_task_id {
-        if !id.trim().is_empty() {
-            task.id = id;
-        }
-    }
-    if let Some(dto) = &ai_ready_opts {
-        task.ai_ready_opts = AiReadyOpts::from(dto);
-    }
-    task.status = TaskStatus::Processing;
-    task.stage = ConversionStage::Fetching;
-    task.progress = 0.1;
-
-    let state = get_state(&app)?;
-    let cancellation = Cancellation::new();
-    state.cancellations.lock().unwrap().insert(task.id.clone(), cancellation.clone());
-    state.tasks.lock().unwrap().insert(task.id.clone(), task.clone());
-    emit_progress(&app, &task);
-
-    // Helper to check cancellation and clean up if cancelled.
-    let check_cancelled = |task: &mut ConversionTask, state: &tauri::State<'_, AppState>| -> Result<(), String> {
-        if cancellation.cancelled() {
-            task.status = TaskStatus::Cancelled;
-            task.error = Some("任务已取消".to_string());
-            emit_status(&app, task);
-            cleanup_cancellation(state, &task.id);
-            cleanup_task(state, &task.id);
-            return Err("cancelled".to_string());
-        }
-        Ok(())
-    };
-
-    check_cancelled(&mut task, &state)?;
-
-    task.stage = ConversionStage::Fetching;
-    task.progress = 0.3;
-    emit_progress(&app, &task);
-
-    let html = web_extractor::fetch_html(&url).await?;
-
-    check_cancelled(&mut task, &state)?;
-
-    task.stage = ConversionStage::Parsing;
-    task.progress = 0.5;
-    emit_progress(&app, &task);
-
-    let extracted = web_extractor::extract_content(&html, &url)
-        .map_err(|e| format!("Failed to extract content: {}", e))?;
-
-    task.stage = ConversionStage::PostProcessing;
-    task.progress = 0.7;
-    emit_progress(&app, &task);
-
-    check_cancelled(&mut task, &state)?;
-
-    let markdown = markdown_pipeline::process(
-        &extracted.markdown,
-        &mode,
-        &url,
-        &task.ai_ready_opts,
-    );
-
-    let output_dir_path = std::path::Path::new(&output_dir);
-    if !output_dir_path.exists() {
-        std::fs::create_dir_all(output_dir_path).map_err(|e| format!("Failed to create output directory: {}", e))?;
-    }
-
-    check_cancelled(&mut task, &state)?;
-
-    task.stage = ConversionStage::Saving;
-    task.progress = 0.9;
-    emit_progress(&app, &task);
-
-    std::fs::write(&output_path, &markdown)
-        .map_err(|e| format!("Failed to write markdown: {}", e))?;
-
-    task.status = TaskStatus::Completed;
-    task.progress = 1.0;
-    emit_progress(&app, &task);
-    emit_status(&app, &task);
-    cleanup_cancellation(&state, &task.id);
-    cleanup_task(&state, &task.id);
-
-    let table_count = markdown_pipeline::count_table_separators(&markdown);
-    let word_count = markdown_pipeline::count_words(&markdown);
-    let result = ConversionResultDto {
-        task_id: task.id.clone(),
-        markdown,
-        document_serialized: String::new(),
-        asset_count: 0,
-        errors: vec![],
-        success: true,
-        output_path,
-        stats: ConversionStatsDto {
-            image_count: 0,
-            table_count,
-            word_count,
-        },
-    };
-
-    Ok(result)
-}
-
 /// Return the default output directory: the directory that contains the
 /// running binary, with an `output/` subdirectory appended.
 #[tauri::command]
@@ -647,76 +487,6 @@ fn list_files_in_folder(path: String) -> Result<Vec<String>, String> {
         .collect())
 }
 
-#[tauri::command]
-async fn download_url(url: String) -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent("OmniMD/0.1.0")
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("服务器返回错误状态码: {}", response.status()));
-    }
-
-    // Accept only binary content types that represent downloadable files.
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let is_acceptable = content_type.is_empty()
-        || content_type.starts_with("application/octet-stream")
-        || content_type.starts_with("application/pdf")
-        || content_type.starts_with("application/vnd")
-        || content_type.starts_with("image/")
-        || content_type.starts_with("text/")
-        || content_type.starts_with("application/zip")
-        || content_type.starts_with("application/xml")
-        || content_type.starts_with("application/json");
-    if !is_acceptable {
-        return Err(format!("不支持的内容类型: {}", content_type));
-    }
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("读取响应失败: {}", e))?;
-
-    let temp_dir = std::env::temp_dir().join("omnimd_downloads");
-    fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("创建临时目录失败: {}", e))?;
-
-    let filename = url
-        .split('/')
-        .last()
-        .filter(|s| !s.is_empty() && s.contains('.'))
-        .unwrap_or("downloaded_file.bin")
-        .to_string();
-
-    let sanitized: String = filename
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
-        .collect();
-    let sanitized = if sanitized.is_empty() {
-        "downloaded_file.bin".to_string()
-    } else {
-        sanitized
-    };
-
-    let file_path = temp_dir.join(&sanitized);
-    fs::write(&file_path, &bytes)
-        .map_err(|e| format!("保存文件失败: {}", e))?;
-
-    Ok(file_path.to_string_lossy().to_string())
-}
-
 // ---------------------------------------------------------------------------
 // Batch task commands
 // ---------------------------------------------------------------------------
@@ -726,21 +496,11 @@ async fn batch_enqueue(
     app: tauri::AppHandle,
     source_path: String,
     output_path: String,
-    output_mode: Option<String>,
-    parse_quality: Option<String>,
 ) -> Result<String, String> {
-    let mode = output_mode
-        .as_deref()
-        .map(OutputMode::from_str)
-        .unwrap_or_default();
-    let quality = parse_quality
-        .as_deref()
-        .map(ParseQuality::from_str)
-        .unwrap_or_default();
     let state = get_state(&app)?;
     state
         .batch_queue
-        .enqueue(app.clone(), source_path, output_path, mode, quality)
+        .enqueue(app.clone(), source_path, output_path)
         .await
 }
 
@@ -987,7 +747,6 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             convert_file,
-            fetch_url,
             cancel_task,
             get_default_output_dir,
             open_folder,
@@ -997,7 +756,6 @@ pub fn run() {
             write_text_file,
             read_text_file,
             list_files_in_folder,
-            download_url,
             list_workspaces,
             add_workspace,
             remove_workspace,

@@ -2,9 +2,6 @@
 import type {
   ConversionResult,
   ConverterInfo,
-  OutputMode,
-  AiReadyOpts,
-  ParseQuality,
   WorkspaceInfo,
   LibraryDocument,
   LibraryFolder,
@@ -12,24 +9,16 @@ import type {
   ScanResult,
   BatchTaskDto,
   BatchSummaryDto,
-  ModelInfo,
-  CacheInfo,
 } from "../types";
 
 export async function convertFile(
   sourcePath: string,
   outputDir: string,
-  outputMode?: OutputMode,
-  aiReadyOpts?: AiReadyOpts,
-  parseQuality?: ParseQuality,
   clientTaskId?: string
 ): Promise<ConversionResult> {
   return invoke<ConversionResult>("convert_file", {
     sourcePath,
     outputDir,
-    outputMode: outputMode ?? null,
-    aiReadyOpts: aiReadyOpts ?? null,
-    parseQuality: parseQuality ?? null,
     clientTaskId: clientTaskId ?? null,
   });
 }
@@ -57,26 +46,6 @@ export async function writeTextFile(
   content: string
 ): Promise<void> {
   return invoke<void>("write_text_file", { path, content });
-}
-
-export async function fetchUrl(
-  url: string,
-  outputDir: string,
-  outputMode?: OutputMode,
-  aiReadyOpts?: AiReadyOpts,
-  clientTaskId?: string
-): Promise<ConversionResult> {
-  return invoke<ConversionResult>("fetch_url", {
-    url,
-    outputDir,
-    outputMode: outputMode ?? null,
-    aiReadyOpts: aiReadyOpts ?? null,
-    clientTaskId: clientTaskId ?? null,
-  });
-}
-
-export async function downloadUrl(url: string): Promise<string> {
-  return invoke<string>("download_url", { url });
 }
 
 export async function readTextFile(path: string): Promise<string> {
@@ -180,15 +149,11 @@ export async function searchDocuments(
 
 export async function batchEnqueue(
   sourcePath: string,
-  outputPath: string,
-  outputMode?: OutputMode,
-  parseQuality?: ParseQuality
+  outputPath: string
 ): Promise<string> {
   return invoke<string>("batch_enqueue", {
     sourcePath,
     outputPath,
-    outputMode: outputMode ?? null,
-    parseQuality: parseQuality ?? null,
   });
 }
 
@@ -234,46 +199,4 @@ export async function batchListTasks(): Promise<BatchTaskDto[]> {
 
 export async function batchGetSummary(): Promise<BatchSummaryDto> {
   return invoke<BatchSummaryDto>("batch_get_summary");
-}
-
-// ---- Model management API ----
-
-export async function listModels(): Promise<ModelInfo[]> {
-  return invoke<ModelInfo[]>("list_models");
-}
-
-export async function getModelStatus(modelName: string): Promise<ModelInfo> {
-  return invoke<ModelInfo>("get_model_status", { modelName });
-}
-
-export async function downloadModel(modelName: string): Promise<void> {
-  return invoke<void>("download_model", { modelName });
-}
-
-export async function cancelModelDownload(): Promise<void> {
-  return invoke<void>("cancel_model_download");
-}
-
-export async function getCacheInfo(): Promise<CacheInfo> {
-  return invoke<CacheInfo>("get_cache_info");
-}
-
-export async function clearModelCache(): Promise<void> {
-  return invoke<void>("clear_model_cache");
-}
-
-export async function setModelSource(source: string): Promise<void> {
-  return invoke<void>("set_model_source", { source });
-}
-
-export async function getModelSource(): Promise<string> {
-  return invoke<string>("get_model_source");
-}
-
-export async function importOfflineModel(path: string): Promise<void> {
-  return invoke<void>("import_offline_model", { path });
-}
-
-export async function checkModelUpdate(modelName: string): Promise<boolean> {
-  return invoke<boolean>("check_model_update", { modelName });
 }

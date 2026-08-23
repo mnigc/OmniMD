@@ -1,10 +1,9 @@
 ﻿import { useEffect, useState } from "react";
-import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Sparkles, Cpu } from "lucide-react";
+import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Cpu } from "lucide-react";
 import { useI18n } from "../i18n";
 import { type ThemeMode } from "../lib/theme";
 import { useThemeMode } from "../hooks/useThemeMode";
 import { PageHeader } from "../components/PageHeader";
-import { OutputModeSelector } from "../components/OutputModeSelector";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
@@ -12,7 +11,6 @@ import { cn } from "../lib/utils";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { getAppVersion } from "../api/tauriApi";
 import { pickOutputDir } from "../api/dialogs";
-import type { ParseQuality } from "../types";
 
 const themeOptions: {
   value: ThemeMode;
@@ -33,7 +31,6 @@ interface NavSection {
 const SECTIONS: NavSection[] = [
   { id: "appearance", icon: <Sun size={15} />, labelKey: "settings.appearance" },
   { id: "conversion", icon: <Cpu size={15} />, labelKey: "settings.conversion" },
-  { id: "ai", icon: <Sparkles size={15} />, labelKey: "settings.ai" },
   { id: "privacy", icon: <ShieldCheck size={15} />, labelKey: "settings.privacy" },
   { id: "about", icon: <Monitor size={15} />, labelKey: "settings.about" },
 ];
@@ -124,24 +121,7 @@ function SettingsNav({
 export function SettingsPage() {
   const { t } = useI18n();
   const { theme, setMode } = useThemeMode();
-  const {
-    parseQuality,
-    setParseQuality,
-    defaultOutputDir,
-    recursive,
-    keepStructure,
-    aiEnabled,
-    aiReadyToc,
-    aiReadyMeta,
-    allowOnline,
-    setDefaultOutputDir,
-    setRecursive,
-    setKeepStructure,
-    setAiEnabled,
-    setAiReadyToc,
-    setAiReadyMeta,
-    setAllowOnline,
-  } = useSettingsStore();
+  const { defaultOutputDir, setDefaultOutputDir } = useSettingsStore();
 
   const [activeSection, setActiveSection] = useState("appearance");
   const [appVersion, setAppVersion] = useState<string>("v0.1.0");
@@ -226,40 +206,6 @@ export function SettingsPage() {
                       </Button>
                     </div>
                   </div>
-                  <ToggleRow
-                    label={t("settings.recursive")}
-                    checked={recursive}
-                    onChange={setRecursive}
-                  />
-                  <ToggleRow
-                    label={t("settings.keepStructure")}
-                    checked={keepStructure}
-                    onChange={setKeepStructure}
-                  />
-                  <div className="py-2.5">
-                    <span className="text-sm text-muted-foreground block mb-2">
-                      {t("settings.parseQuality")}
-                    </span>
-                    <div className="flex gap-2">
-                      {(["auto", "quick", "high"] as ParseQuality[]).map((mode) => (
-                        <button
-                          key={mode}
-                          onClick={() => setParseQuality(mode)}
-                          className={cn(
-                            "flex-1 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
-                            parseQuality === mode
-                              ? "border-primary bg-accent text-accent-foreground shadow-sm"
-                              : "border-input text-muted-foreground hover:bg-accent/50"
-                          )}
-                        >
-                          {t(`settings.parseQualityMode.${mode}`)}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="text-xs text-muted-foreground/70 mt-1.5 block">
-                      {t("settings.parseQualityDesc")}
-                    </span>
-                  </div>
                   <div className="py-2.5">
                     <span className="text-sm text-muted-foreground block mb-2">
                       {t("settings.engineNotice")}
@@ -268,48 +214,6 @@ export function SettingsPage() {
                       {t("settings.engineNoticeDesc")}
                     </span>
                   </div>
-                </div>
-                <div className="mt-4">
-                  <OutputModeSelector />
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <div id="ai">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles size={16} />
-                  {t("settings.ai")}
-                </CardTitle>
-                <CardDescription>{t("settings.aiDesc")}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col divide-y divide-border">
-                  <ToggleRow
-                    label={t("settings.aiToggle")}
-                    checked={aiEnabled}
-                    onChange={setAiEnabled}
-                  />
-                  <ToggleRow
-                    label={t("settings.genToc")}
-                    checked={aiReadyToc}
-                    disabled={!aiEnabled}
-                    onChange={setAiReadyToc}
-                  />
-                  <ToggleRow
-                    label={t("settings.genMeta")}
-                    checked={aiReadyMeta}
-                    disabled={!aiEnabled}
-                    onChange={setAiReadyMeta}
-                  />
-                  <ToggleRow
-                    label={t("settings.allowOnline")}
-                    checked={allowOnline}
-                    onChange={setAllowOnline}
-                    hint={t("settings.allowOnlineHint")}
-                  />
                 </div>
               </CardContent>
             </Card>

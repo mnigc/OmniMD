@@ -8,8 +8,7 @@ use tauri::Emitter;
 use tokio::sync::Mutex;
 
 use crate::engine::DocumentEngine;
-use crate::models::ocr::{Cancellation, ProgressCallback};
-use crate::models::task::{BatchSummaryDto, ConversionStage, ConversionTask, OutputMode, ParseQuality, TaskStatus};
+use crate::models::task::{BatchSummaryDto, Cancellation, ConversionStage, ConversionTask, ProgressCallback, TaskStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,9 +44,9 @@ fn emit_summary(app: &tauri::AppHandle) {
     }
 }
 
-fn insert_batch(app: &tauri::AppHandle, id: &str, source: &str, output: &str, mode: &OutputMode, quality: &ParseQuality, now: u64) {
+fn insert_batch(app: &tauri::AppHandle, id: &str, source: &str, output: &str, now: u64) {
     if let Ok(db) = crate::db::db(app) {
-        let _ = db.insert_batch_task(id, source, output, mode, quality, now);
+        let _ = db.insert_batch_task(id, source, output, now);
     }
 }
 
@@ -95,7 +94,7 @@ impl BatchQueue {
         self.running.load(Ordering::Relaxed)
     }
 
-    pub async fn enqueue(&self, app: tauri::AppHandle, source_path: String, output_path: String, output_mode: OutputMode, parse_quality: ParseQuality) -> Result<String, String> {
+    pub async fn enqueue(&self, app: tauri::AppHandle, source_path: String, output_path: String) -> Result<String, String> {
         // Deduplicate: if an active task for the same source already exists,
         // reuse it instead of creating another identical one. This prevents a
         // single dropped file from producing a pile of duplicate tasks.
@@ -109,7 +108,7 @@ impl BatchQueue {
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
         let id = uuid::Uuid::new_v4().to_string();
 
-        insert_batch(&app, &id, &source_path, &output_path, &output_mode, &parse_quality, now);
+        insert_batch(&app, &id, &source_path, &output_path, now);
         emit_summary(&app);
 
         Ok(id)
@@ -217,9 +216,6 @@ let active = active_tasks.lock().await.len();
                                 error: None,
                                 created_at: task_dto.created_at,
                                 completed_at: None,
-                                output_mode: task_dto.output_mode.clone(),
-                                ai_ready_opts: crate::models::task::AiReadyOpts::default(),
-                                parse_quality: task_dto.parse_quality.clone(),
                             };
 
                             let created_at = task_dto.created_at;

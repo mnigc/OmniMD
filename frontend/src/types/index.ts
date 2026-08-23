@@ -3,8 +3,6 @@
   sourcePath: string;
   outputPath: string;
   outputDir: string;
-  outputMode: OutputMode;
-  parseQuality?: ParseQuality;
   status: TaskStatus;
   progress: number;
   stage: ConversionStage;
@@ -17,7 +15,6 @@ export interface HistoryEntry {
   id: string;
   sourcePath: string;
   outputPath: string;
-  outputMode: OutputMode;
   status: TaskStatus;
   error: string | null;
   createdAt: number;
@@ -45,11 +42,6 @@ export interface ErrorDto {
   code: string;
   message: string;
   retryable: boolean;
-}
-
-export interface AiReadyOpts {
-  genToc: boolean;
-  genMeta: boolean;
 }
 
 export interface TaskProgressDto {
@@ -84,10 +76,6 @@ export type ConversionStage =
   | "Parsing"
   | "PostProcessing"
   | "Saving";
-
-export type OutputMode = "standard" | "aiReady" | "obsidian";
-
-export type ParseQuality = "auto" | "quick" | "high";
 
 // ---- M2 Workbench data layer ----
 
@@ -142,8 +130,6 @@ export interface BatchTaskDto {
   createdAt: number;
   completedAt: number | null;
   elapsedSecs: number;
-  outputMode: OutputMode;
-  parseQuality: ParseQuality;
   retryCount: number;
 }
 
@@ -174,44 +160,4 @@ export interface BatchStatusEvent {
 
 export interface BatchSummaryEvent {
   summary: BatchSummaryDto;
-}
-
-// ---- Model management types ----
-
-export interface HardwareRequirements {
-  minRamGb: number;
-  recRamGb: number;
-  gpuRequired: boolean;
-  gpuVramGb: number;
-  cpuOnlySupported: boolean;
-  notes: string;
-}
-
-export interface ModelInfo {
-  name: string;
-  displayName: string;
-  sizeBytes: number;
-  status: string;
-  path: string | null;
-  downloadUrl: string | null;
-  version: string | null;
-  hardwareRequirements: HardwareRequirements;
-}
-
-export interface CacheInfo {
-  path: string;
-  totalSizeBytes: number;
-}
-
-export interface DownloadProgress {
-  modelName: string;
-  progress: number;
-  speed: string;
-  stage: string;
-}
-
-export interface PythonSetupProgress {
-  stage: string;
-  progress: number;
-  detail: string;
 }

@@ -49,12 +49,6 @@ const statusKey: Record<string, string> = {
   Cancelled: "taskStatus.cancelled",
 };
 
-const modeColors: Record<string, string> = {
-  standard: "bg-muted/60 text-muted-foreground",
-  aiReady: "bg-primary/10 text-primary",
-  obsidian: "bg-violet-500/10 text-violet-600 dark:text-violet-300",
-};
-
 function formatTime(ts: number | null): string {
   if (!ts) return "\u2014";
   const d = new Date(ts);
@@ -107,14 +101,6 @@ function HistoryCard({
             title={entry.sourcePath}
           >
             {fileName}
-          </span>
-          <span
-            className={cn(
-              "text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0",
-              modeColors[entry.outputMode] || modeColors.standard
-            )}
-          >
-            {t(`outputMode.${entry.outputMode}`)}
           </span>
         </div>
         {entry.error && (
@@ -205,7 +191,6 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
         sourcePath: entry.sourcePath,
         outputDir: entry.outputPath.split(/[\\/]/).slice(0, -1).join("/") || ".",
         outputPath: entry.outputPath,
-        outputMode: entry.outputMode,
         status: "Completed",
         progress: 1,
         stage: "Saving",

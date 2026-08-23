@@ -2,8 +2,7 @@ pub mod anydoc_engine;
 pub mod batch_queue;
 pub mod model_manager;
 
-use crate::models::ocr::{Cancellation, ProgressCallback};
-use crate::models::task::{ConversionError, ConversionResult, ConversionTask};
+use crate::models::task::{Cancellation, ProgressCallback, ConversionError, ConversionResult, ConversionTask};
 
 /// Abstract document-to-markdown engine. OmniMD consumes documents through
 /// this trait; `anydoc_engine` is the local implementation (pure Rust, no ML).

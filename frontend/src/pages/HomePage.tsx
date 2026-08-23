@@ -2,7 +2,6 @@
 import {
   Folder, FolderOpen,
   Inbox,
-  Link,
   Loader2,
   Play,
   RotateCcw,
@@ -14,14 +13,12 @@ import {
 } from "lucide-react";
 import { DropZone } from "../components/DropZone";
 import { TaskItem } from "../components/TaskItem";
-import { OutputModeSelector } from "../components/OutputModeSelector";
 import { SellingPoints } from "../components/SellingPoints";
 import {
   getDefaultOutputDir,
   openFolder,
   getSupportedFormats,
   listFilesInFolder,
-  fetchUrl,
 } from "../api/tauriApi";
 import { pickOutputDir } from "../api/dialogs";
 import { confirm } from "@tauri-apps/plugin-dialog";
@@ -51,14 +48,11 @@ import {
 export function HomePage() {
   const { t } = useI18n();
   const { tasks, start, loading, cancelAll, retryFailed, clearDone, enqueue, concurrency, setConcurrency } = useBatchStore();
-  const { outputMode, defaultOutputDir, allowOnline, parseQuality } = useSettingsStore();
+  const { defaultOutputDir } = useSettingsStore();
 
   const [outputDir, setOutputDir] = useState(defaultOutputDir);
   const [outputLocationMode, setOutputLocationMode] = useState<"sourceDir" | "custom">("sourceDir");
   const [supportedFormats, setSupportedFormats] = useState<string[]>([]);
-  const [urlInput, setUrlInput] = useState("");
-  const [downloading, setDownloading] = useState(false);
-  const [urlError, setUrlError] = useState("");
 
   useEffect(() => {
     getSupportedFormats().then(setSupportedFormats).catch(() => {});
@@ -87,9 +81,6 @@ export function HomePage() {
   const inferOutputDir = useCallback(
     (path: string): string => {
       if (outputLocationMode === "custom") return outputDir || ".";
-      if (path.startsWith("http://") || path.startsWith("https://")) {
-        return defaultOutputDir || ".";
-      }
       return path.replace(/\\/g, "/").split("/").slice(0, -1).join("/") || ".";
     },
     [outputDir, outputLocationMode, defaultOutputDir]
@@ -113,7 +104,7 @@ export function HomePage() {
         const fileName = path.split(/[\\/]/).pop() || "output";
         const outputName = fileName.replace(/\.[^.]+$/, ".md");
         const outputPath = `${dir}/${outputName}`;
-        const taskId = await enqueue(path, outputPath, outputMode, parseQuality);
+        const taskId = await enqueue(path, outputPath);
         if (!taskId) {
           console.error("Failed to enqueue:", path);
           showToast(t("toast.filePickFailed"), 3000);
@@ -122,7 +113,7 @@ export function HomePage() {
       await useBatchStore.getState().refreshTasks();
       await useBatchStore.getState().refreshSummary();
     },
-    [inferOutputDir, outputMode, parseQuality, enqueue, t]
+    [inferOutputDir, enqueue, t]
   );
 
   const addInputPaths = useCallback(async (paths: string[]) => {
@@ -160,28 +151,6 @@ export function HomePage() {
       // ignore
     }
   }, [outputDir]);
-
-  const handleUrlSubmit = useCallback(async () => {
-    const url = urlInput.trim();
-    if (!url) return;
-    if (!allowOnline) {
-      setUrlError(t("home.urlNotAllowed"));
-      return;
-    }
-    setDownloading(true);
-    setUrlError("");
-    try {
-      const dir = inferOutputDir(url);
-      await fetchUrl(url, dir, outputMode);
-      await useBatchStore.getState().refreshTasks();
-      await useBatchStore.getState().refreshSummary();
-      setUrlInput("");
-    } catch (err: any) {
-      setUrlError(err.message || String(err));
-    } finally {
-      setDownloading(false);
-    }
-  }, [urlInput, outputMode, inferOutputDir, allowOnline, t]);
 
   const orderedTasks = [...tasks]
     .sort((a, b) => {
@@ -232,43 +201,6 @@ export function HomePage() {
                 </CardHeader>
                   <CardContent className="flex flex-col gap-3 p-3 pt-0">
                   <DropZone onFiles={addInputPaths} onFolder={handleFolder} formats={supportedFormats} />
-
-                  <div className="flex items-center gap-3">
-                    <span className="h-px flex-1 bg-border" />
-                    <span className="text-xs text-muted-foreground">{t("home.orPasteUrl")}</span>
-                    <span className="h-px flex-1 bg-border" />
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1 min-w-0">
-                        <Link size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                        <Input
-                          type="text"
-                          placeholder={allowOnline ? t("home.pasteUrl") : t("home.pasteUrlDisabled")}
-                          value={urlInput}
-                          onChange={(e) => setUrlInput(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") handleUrlSubmit(); }}
-                          disabled={downloading || !allowOnline}
-                          className="pl-8 text-xs h-9"
-                        />
-                      </div>
-                      <Button size="sm" onClick={handleUrlSubmit} disabled={downloading || !allowOnline || !urlInput.trim()} className="h-9 shrink-0">
-                        {downloading ? (
-                          <Loader2 size={13} className="animate-spin" />
-                        ) : (
-                          <Link size={13} />
-                        )}
-                        {t("home.convertNow")}
-                      </Button>
-                    </div>
-                    {urlError && (
-                      <p className="text-xs text-destructive break-words">{urlError}</p>
-                    )}
-                    {urlInput && (
-                      <p className="text-xs text-muted-foreground">{t("home.urlPrivacyNote")}</p>
-                    )}
-                  </div>
                 </CardContent>
               </Card>
 
@@ -278,7 +210,6 @@ export function HomePage() {
                   <CardTitle className="text-sm">{t("home.conversionSettings")}</CardTitle>
                 </CardHeader>
                   <CardContent className="flex flex-col gap-4 p-3 pt-0">
-                  <OutputModeSelector />
 
                   <div className="flex items-center gap-2">
                     <Label className="text-xs text-muted-foreground whitespace-nowrap">{t("batch.concurrency")}</Label>

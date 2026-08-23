@@ -6,10 +6,9 @@ use crate::engine::DocumentEngine;
 use crate::file_utils::{self, ASSET_DIR_NAME};
 use crate::markdown_pipeline;
 use crate::models::document::{Asset, Document};
-use crate::models::ocr::{Cancellation, ProgressCallback};
 use crate::models::task::{
-    ConversionError, ConversionResult, ConversionStage, ConversionStats, ConversionTask,
-    ErrorCode,
+    Cancellation, ConversionError, ConversionResult, ConversionStage, ConversionStats,
+    ConversionTask, ErrorCode, ProgressCallback,
 };
 
 /// Local document-to-Markdown engine backed by [anydoc](https://github.com/firecrawl/anydoc),
@@ -289,8 +288,7 @@ impl DocumentEngine for AnyDocEngine {
         }
 
         let markdown = restore_image_references(raw_markdown, &inline_refs);
-        let markdown =
-            markdown_pipeline::process(&markdown, &task.output_mode, &task.source_path, &task.ai_ready_opts);
+        let markdown = markdown_pipeline::process(&markdown);
 
         let stats = ConversionStats {
             image_count: inline_refs.len(),
@@ -360,7 +358,6 @@ impl DocumentEngine for AnyDocEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::task::{OutputMode, ParseQuality};
 
     #[tokio::test]
     async fn converts_csv_to_markdown_table() {
@@ -370,12 +367,7 @@ mod tests {
         std::fs::write(&src, "name,age\nalice,30\n").unwrap();
 
         let output_path = file_utils::get_output_path(src.to_str().unwrap(), dir.to_str().unwrap());
-        let mut task = ConversionTask::with_mode(
-            src.to_str().unwrap(),
-            &output_path,
-            OutputMode::Standard,
-        );
-        task.parse_quality = ParseQuality::Auto;
+        let task = ConversionTask::new(src.to_str().unwrap(), &output_path);
 
         let engine = AnyDocEngine::new();
         let result = engine.convert(&task, None, None).await.unwrap();
@@ -394,11 +386,7 @@ mod tests {
         let src = dir.join("notes.txt");
         std::fs::write(&src, "hello").unwrap();
         let output_path = file_utils::get_output_path(src.to_str().unwrap(), dir.to_str().unwrap());
-        let task = ConversionTask::with_mode(
-            src.to_str().unwrap(),
-            &output_path,
-            OutputMode::Standard,
-        );
+        let task = ConversionTask::new(src.to_str().unwrap(), &output_path);
 
         let engine = AnyDocEngine::new();
         let err = engine.convert(&task, None, None).await.unwrap_err();

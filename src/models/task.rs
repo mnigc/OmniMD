@@ -1,7 +1,32 @@
 ﻿use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use super::document::{Asset, Document};
+
+/// Optional progress callback: receives a value in [0.0, 1.0] and an optional
+/// human-readable detail string (e.g. the current conversion stage).
+/// Wrapped in `Arc` so it can be shared/cloned across threads.
+pub type ProgressCallback = Arc<dyn Fn(f32, Option<String>) + Send + Sync>;
+
+/// Shared cooperative-cancellation flag. `cancelled()` becomes `true` once
+/// any caller requests the running conversion to stop.
+#[derive(Debug, Clone, Default)]
+pub struct Cancellation(Arc<std::sync::atomic::AtomicBool>);
+
+impl Cancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskStatus {
@@ -34,58 +59,6 @@ pub enum ErrorCode {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum OutputMode {
-    Standard,
-    AiReady,
-    Obsidian,
-}
-
-impl Default for OutputMode {
-    fn default() -> Self {
-        OutputMode::AiReady
-    }
-}
-
-impl OutputMode {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "standard" => OutputMode::Standard,
-            "obsidian" => OutputMode::Obsidian,
-            _ => OutputMode::AiReady,
-        }
-    }
-}
-
-/// User-facing parse quality. Forwarded to the active recognition engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ParseQuality {
-    /// Let the engine decide based on hardware and document type.
-    Auto,
-    /// Speed first.
-    Quick,
-    /// Best fidelity.
-    High,
-}
-
-impl Default for ParseQuality {
-    fn default() -> Self {
-        ParseQuality::Auto
-    }
-}
-
-impl ParseQuality {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "quick" => ParseQuality::Quick,
-            "high" => ParseQuality::High,
-            _ => ParseQuality::Auto,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionError {
     pub code: ErrorCode,
@@ -110,16 +83,6 @@ pub struct ConversionStats {
     pub word_count: usize,
 }
 
-/// Options controlling the AI Ready formatter (see `markdown_pipeline`).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct AiReadyOpts {
-    /// Insert a generated table of contents at the top of the document.
-    pub gen_toc: bool,
-    /// Insert a controlled metadata comment block at the top of the document.
-    pub gen_meta: bool,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionTask {
     pub id: String,
@@ -131,12 +94,6 @@ pub struct ConversionTask {
     pub error: Option<String>,
     pub created_at: u64,
     pub completed_at: Option<u64>,
-    #[serde(default)]
-    pub output_mode: OutputMode,
-    #[serde(default)]
-    pub ai_ready_opts: AiReadyOpts,
-    #[serde(default)]
-    pub parse_quality: ParseQuality,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,8 +130,6 @@ pub struct BatchTaskDto {
     pub created_at: u64,
     pub completed_at: Option<u64>,
     pub elapsed_secs: u64,
-    pub output_mode: OutputMode,
-    pub parse_quality: ParseQuality,
     pub retry_count: u32,
 }
 
@@ -200,10 +155,6 @@ pub struct BatchFilter {
 
 impl ConversionTask {
     pub fn new(source_path: &str, output_path: &str) -> Self {
-        Self::with_mode(source_path, output_path, OutputMode::default())
-    }
-
-    pub fn with_mode(source_path: &str, output_path: &str, mode: OutputMode) -> Self {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
@@ -219,19 +170,6 @@ impl ConversionTask {
             error: None,
             created_at: now,
             completed_at: None,
-            output_mode: mode,
-            ai_ready_opts: AiReadyOpts::default(),
-            parse_quality: ParseQuality::default(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_quality_is_auto() {
-        assert_eq!(ParseQuality::default(), ParseQuality::Auto);
     }
 }

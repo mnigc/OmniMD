@@ -21,7 +21,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-use crate::models::task::{BatchTaskDto, BatchSummaryDto, OutputMode, ParseQuality};
+use crate::models::task::{BatchTaskDto, BatchSummaryDto};
 
 // ---------------------------------------------------------------------------
 // DTOs (serialized to the frontend, camelCase)
@@ -625,18 +625,13 @@ impl WorkspaceDb {
         id: &str,
         source_path: &str,
         output_path: &str,
-        output_mode: &OutputMode,
-        parse_quality: &ParseQuality,
         created_at: u64,
     ) -> Result<(), String> {
-        let mode = serde_json::to_string(output_mode).unwrap_or_else(|_| "\"aiReady\"".to_string());
-        let quality =
-            serde_json::to_string(parse_quality).unwrap_or_else(|_| "\"auto\"".to_string());
         self.conn
             .execute(
-                "INSERT INTO batch_tasks (id, source_path, output_path, status, created_at, output_mode, parse_quality)
-                 VALUES (?1, ?2, ?3, 'Pending', ?4, ?5, ?6)",
-                rusqlite::params![id, source_path, output_path, created_at, mode, quality],
+                "INSERT INTO batch_tasks (id, source_path, output_path, status, created_at)
+                 VALUES (?1, ?2, ?3, 'Pending', ?4)",
+                rusqlite::params![id, source_path, output_path, created_at],
             )
             .map_err(err)?;
         Ok(())
@@ -677,7 +672,7 @@ impl WorkspaceDb {
             .conn
             .prepare(
                 "SELECT id, source_path, output_path, status, progress, stage, error,
-                        created_at, completed_at, elapsed_secs, output_mode, parse_quality, retry_count
+                        created_at, completed_at, elapsed_secs, retry_count
                  FROM batch_tasks
                  WHERE status = ?1
                  ORDER BY created_at ASC
@@ -697,7 +692,7 @@ impl WorkspaceDb {
             .conn
             .prepare(
                 "SELECT id, source_path, output_path, status, progress, stage, error,
-                        created_at, completed_at, elapsed_secs, output_mode, parse_quality, retry_count
+                        created_at, completed_at, elapsed_secs, retry_count
                  FROM batch_tasks
                  ORDER BY created_at ASC",
             )
@@ -881,11 +876,6 @@ fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<WorkspaceDto> {
 }
 
 fn row_to_batch_task(r: &rusqlite::Row) -> rusqlite::Result<BatchTaskDto> {
-    let output_mode_str: String = r.get(10)?;
-    let parse_quality_str: String = r.get(11)?;
-    let output_mode: OutputMode = serde_json::from_str(&output_mode_str).unwrap_or(OutputMode::AiReady);
-    let parse_quality: ParseQuality =
-        serde_json::from_str(&parse_quality_str).unwrap_or(ParseQuality::Auto);
     Ok(BatchTaskDto {
         id: r.get(0)?,
         source_path: r.get(1)?,
@@ -897,9 +887,7 @@ fn row_to_batch_task(r: &rusqlite::Row) -> rusqlite::Result<BatchTaskDto> {
         created_at: r.get::<_, i64>(7)? as u64,
         completed_at: r.get::<_, Option<i64>>(8)?.map(|v| v as u64),
         elapsed_secs: r.get::<_, i64>(9)? as u64,
-        output_mode,
-        parse_quality,
-        retry_count: r.get::<_, i32>(12)? as u32,
+        retry_count: r.get::<_, i32>(10)? as u32,
     })
 }
 
