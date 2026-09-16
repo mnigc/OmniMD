@@ -109,16 +109,25 @@ export function SettingsPage() {
       ? t("update.upToDate")
       : updateStatus === "available"
         ? t("update.available", { version: updateVersion ?? "" })
-        : updateStatus === "ready"
-          ? t("update.restartHint")
-          : updateStatus === "error"
-            ? t("update.failed")
-            : "";
+        : updateStatus === "downloading"
+          ? t("update.sidebarDownloading")
+          : updateStatus === "downloaded"
+            ? t("update.sidebarDownloaded")
+            : updateStatus === "ready"
+              ? t("update.restartHint")
+              : updateStatus === "error"
+                ? t("update.failed")
+                : "";
 
-  // When an update is already known, the button opens the dialog instead of
-  // re-running the check.
+  // When an update is already known (or in flight), the button opens the
+  // dialog instead of re-running the check.
   const handleCheckUpdate = () => {
-    if (updateStatus === "available" || updateStatus === "ready") {
+    if (
+      updateStatus === "available" ||
+      updateStatus === "downloading" ||
+      updateStatus === "downloaded" ||
+      updateStatus === "ready"
+    ) {
       openUpdateDialog();
       return;
     }

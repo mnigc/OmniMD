@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { AlertCircle, Download, Loader2, RotateCw, X } from "lucide-react";
+import { AlertCircle, Download, HardDriveDownload, Loader2, RotateCw, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { useUpdateStore } from "../store/useUpdateStore";
 import { Button } from "./ui/button";
@@ -16,6 +16,7 @@ export function UpdateDialog() {
     progress,
     error,
     dialogOpen,
+    download,
     install,
     restart,
     closeDialog,
@@ -65,7 +66,9 @@ export function UpdateDialog() {
 
   if (!dialogOpen) return null;
 
-  const busy = status === "downloading" || status === "installing";
+  // Only the installer launch itself pins the dialog — a running download may
+  // always be dismissed and continues in the background.
+  const busy = status === "installing";
   const canClose = !busy;
 
   return (
@@ -131,6 +134,16 @@ export function UpdateDialog() {
                   ? t("update.downloading")
                   : t("update.downloadingPercent", { percent: progress })}
               </span>
+              <span className="text-xs text-muted-foreground/80">
+                {t("update.backgroundNote")}
+              </span>
+            </div>
+          )}
+
+          {status === "downloaded" && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <HardDriveDownload size={14} className="shrink-0" />
+              <span>{t("update.downloaded")}</span>
             </div>
           )}
 
@@ -164,6 +177,16 @@ export function UpdateDialog() {
               <RotateCw size={14} />
               {t("update.restart")}
             </Button>
+          ) : status === "downloaded" ? (
+            <>
+              <Button size="sm" variant="outline" onClick={closeDialog}>
+                {t("update.later")}
+              </Button>
+              <Button size="sm" onClick={() => install()}>
+                <HardDriveDownload size={14} />
+                {t("update.installNow")}
+              </Button>
+            </>
           ) : (
             <>
               <Button
@@ -172,16 +195,21 @@ export function UpdateDialog() {
                 onClick={closeDialog}
                 disabled={!canClose}
               >
-                {t("update.later")}
+                {status === "downloading"
+                  ? t("update.hide")
+                  : t("update.later")}
               </Button>
-              <Button size="sm" onClick={() => install()} disabled={busy}>
-                {busy ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
+              {status !== "downloading" && status !== "installing" && (
+                <Button
+                  size="sm"
+                  onClick={
+                    status === "available" ? () => download() : () => install()
+                  }
+                >
                   <Download size={14} />
-                )}
-                {status === "error" ? t("common.retry") : t("update.download")}
-              </Button>
+                  {status === "error" ? t("common.retry") : t("update.download")}
+                </Button>
+              )}
             </>
           )}
         </div>

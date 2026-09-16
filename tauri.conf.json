@@ -1,7 +1,7 @@
 {
   "productName": "OmniMD",
   "identifier": "com.omnid.app",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "build": {
     "frontendDist": "frontend/dist",
     "devUrl": "http://localhost:1421",
@@ -42,7 +42,8 @@
     ],
     "windows": {
       "nsis": {
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "installMode": "perMachine"
       }
     }
   },

@@ -73,7 +73,20 @@ export function App() {
   }, []);
 
   const showUpdateHint =
-    updateStatus === "available" || updateStatus === "ready";
+    updateStatus === "available" ||
+    updateStatus === "downloading" ||
+    updateStatus === "downloaded" ||
+    updateStatus === "ready";
+  const updateHintLabel =
+    updateStatus === "ready"
+      ? t("update.restartHint")
+      : updateStatus === "downloading"
+        ? t("update.sidebarDownloading")
+        : updateStatus === "downloaded"
+          ? t("update.sidebarDownloaded")
+          : updateVersion
+            ? t("update.available", { version: updateVersion })
+            : t("update.title");
 
   // Listen for shell-context-menu argv: convert files and auto-ingest into library.
   useEffect(() => {
@@ -304,31 +317,15 @@ export function App() {
               <button
                 type="button"
                 onClick={openUpdateDialog}
-                title={
-                  updateVersion
-                    ? t("update.available", { version: updateVersion })
-                    : t("update.title")
-                }
-                aria-label={
-                  updateVersion
-                    ? t("update.available", { version: updateVersion })
-                    : t("update.title")
-                }
+                title={updateHintLabel}
+                aria-label={updateHintLabel}
                 className={cn(
                   "flex items-center gap-2 rounded-lg text-xs font-medium text-primary transition-colors hover:bg-primary/10",
                   sidebarOpen ? "px-3 py-2" : "justify-center px-0 py-2"
                 )}
               >
                 <Download size={14} className="shrink-0" />
-                {sidebarOpen && (
-                  <span className="truncate">
-                    {updateStatus === "ready"
-                      ? t("update.restartHint")
-                      : t("update.sidebarHint", {
-                          version: updateVersion ?? "",
-                        })}
-                  </span>
-                )}
+                {sidebarOpen && <span className="truncate">{updateHintLabel}</span>}
               </button>
             )}
             <div

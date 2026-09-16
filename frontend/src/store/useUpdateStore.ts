@@ -1,10 +1,12 @@
 import { create } from "zustand";
 import {
   checkForUpdate,
-  installPendingUpdate,
+  downloadPendingUpdate,
+  installDownloadedUpdate,
   relaunchApp,
   type DownloadEvent,
 } from "../api/updater";
+import { showToast } from "../lib/toast";
 import { translate } from "../i18n";
 
 export type UpdateStatus =
@@ -13,6 +15,7 @@ export type UpdateStatus =
   | "up-to-date"
   | "available"
   | "downloading"
+  | "downloaded"
   | "installing"
   | "ready"
   | "error";
@@ -25,11 +28,12 @@ interface UpdateState {
   date: string | null;
   progress: number | null;
   error: string | null;
-  /** 错误来源：决定 Retry 按钮应重新检查还是重新安装。 */
-  errorPhase: "check" | "install" | null;
+  /** 错误来源：决定 Retry 按钮应重新检查、重新下载还是重新安装。 */
+  errorPhase: "check" | "download" | "install" | null;
   dialogOpen: boolean;
 
   check: (options?: { silent?: boolean }) => Promise<void>;
+  download: () => Promise<void>;
   install: () => Promise<void>;
   restart: () => Promise<void>;
   openDialog: () => void;
@@ -53,7 +57,11 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
    */
   check: async ({ silent = false } = {}) => {
     const current = get().status;
-    if (current === "checking" || current === "downloading" || current === "installing") {
+    if (
+      current === "checking" ||
+      current === "downloading" ||
+      current === "installing"
+    ) {
       return;
     }
     if (!silent) set({ status: "checking", error: null });
@@ -93,10 +101,15 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     }
   },
 
-  install: async () => {
+  /**
+   * Download in the background: the dialog can be closed while this runs and
+   * the download keeps going. Installation only happens when the user
+   * explicitly calls {@link install} (on Windows it closes the app).
+   */
+  download: async () => {
     const state = get();
     if (state.status !== "available" && state.status !== "error") return;
-    // check 阶段的失败（断网等）意味着更新句柄已被释放，Retry 走安装
+    // check 阶段的失败（断网等）意味着更新句柄已被释放，Retry 走下载
     // 只会再次报 "No pending update"——必须重新执行 check。
     if (state.status === "error" && state.errorPhase === "check") {
       await get().check();
@@ -120,19 +133,57 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
           });
           break;
         case "Finished":
-          set({ status: "installing", progress: 100 });
+          set({ progress: 100 });
           break;
       }
     };
 
     try {
-      await installPendingUpdate(onEvent);
-      // Unreachable on Windows (the installer exits the app first).
-      set({ status: "ready" });
+      await downloadPendingUpdate(onEvent);
+      set({ status: "downloaded", progress: null });
+      showToast(translate("update.downloadedToast"), 4000);
     } catch (err) {
       set({
         status: "error",
         progress: null,
+        error: err instanceof Error ? err.message : String(err),
+        errorPhase: "download",
+      });
+    }
+  },
+
+  /**
+   * Install the already-downloaded update. On Windows the installer exits the
+   * app, so the promise never resolves there.
+   */
+  install: async () => {
+    const state = get();
+    if (state.status === "error" && state.errorPhase === "check") {
+      await get().check();
+      return;
+    }
+    if (state.status === "error" && state.errorPhase === "download") {
+      await get().download();
+      return;
+    }
+    // "downloaded"，或一次失败的安装重试（下载句柄仍有效）都走这里。
+    if (
+      state.status !== "downloaded" &&
+      !(state.status === "error" && state.errorPhase === "install")
+    ) {
+      return;
+    }
+    set({ status: "installing", error: null, errorPhase: null });
+
+    try {
+      await installDownloadedUpdate();
+      // Unreachable on Windows (the installer exits the app first).
+      set({ status: "ready" });
+    } catch (err) {
+      // 常见于 Windows 上 UAC 被拒绝或安装目录不可写：句柄未释放，
+      // 保持 error 状态让用户看到原因，Retry 直接重试安装。
+      set({
+        status: "error",
         error: err instanceof Error ? err.message : String(err),
         errorPhase: "install",
       });
@@ -155,9 +206,9 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
 
   openDialog: () => set({ dialogOpen: true }),
   closeDialog: () => {
-    const status = get().status;
-    // Never let the user dismiss the dialog while an install is in flight.
-    if (status === "downloading" || status === "installing") return;
+    // Only the installer launch itself is non-dismissable — the download may
+    // always continue in the background.
+    if (get().status === "installing") return;
     set({ dialogOpen: false });
   },
 }));

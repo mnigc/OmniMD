@@ -16,8 +16,8 @@ export interface UpdateInfo {
 
 /**
  * The updater returns a `Resource` handle that must stay alive between the
- * check and the install step, so it is kept in module scope instead of React
- * state (which would be recreated on every render).
+ * check, the download and the install step, so it is kept in module scope
+ * instead of React state (which would be recreated on every render).
  */
 let pending: Update | null = null;
 
@@ -37,19 +37,30 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
 }
 
 /**
- * Download and install the update found by {@link checkForUpdate}.
- *
- * On Windows the app is exited by the installer; on macOS/Linux the caller has
- * to relaunch the app for the new version to take effect.
+ * Download only — the download keeps running even if the caller closes the
+ * progress UI. The handle stays alive so {@link installDownloadedUpdate} can
+ * run at a later point.
  */
-export async function installPendingUpdate(
+export async function downloadPendingUpdate(
   onEvent: (event: DownloadEvent) => void
 ): Promise<void> {
   const update = pending;
   if (!update) throw new Error("No pending update");
-  await update.downloadAndInstall(onEvent);
+  await update.download(onEvent);
+}
+
+/**
+ * Install the update previously fetched by {@link downloadPendingUpdate}.
+ *
+ * On Windows the app is exited by the installer; on macOS/Linux the caller has
+ * to relaunch the app for the new version to take effect.
+ */
+export async function installDownloadedUpdate(): Promise<void> {
+  const update = pending;
+  if (!update) throw new Error("No pending update");
+  await update.install();
   // Only release on success: a failed attempt keeps the handle so the user can
-  // retry without running the whole check again.
+  // retry without re-downloading.
   await releasePending();
 }
 
