@@ -16,6 +16,28 @@ use crate::models::task::{
 /// with the same stem could resolve to the same path.
 static OUTPUT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// 转换源文件的大小上限：`fs::read` 会把整个文件读进内存（解析期间还会
+/// 再派生 2-3 份图像字节副本），超过上限直接拒绝而不是先吃满内存再失败。
+const MAX_SOURCE_BYTES: u64 = 200 * 1024 * 1024;
+
+/// 原子写入：先写 `<path>.tmp` 再 rename，进程在写入中途崩溃也不会留下
+/// 截断的目标文件。Windows 上 rename 不能覆盖已存在的目标，先删旧目标
+/// （两次操作之间的窗口极短，且远好于留下半个文件）。
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    if path.exists() {
+        if let Err(e) = std::fs::remove_file(path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.to_string());
+        }
+    }
+    std::fs::rename(&tmp, path)
+        .map_err(|e| { let _ = std::fs::remove_file(&tmp); e.to_string() })
+}
+
 /// Local document-to-Markdown engine backed by [anydoc](https://github.com/firecrawl/anydoc),
 /// a pure-Rust converter with no ML models and no external services.
 ///
@@ -164,26 +186,32 @@ fn collect_inline_images(inlines: &[anydoc::model::Inline], out: &mut Vec<Inline
     }
 }
 
-/// Best-effort restoration of inline image references: walk the rendered
-/// Markdown and replace each image's rendered alt text (they appear in the
-/// same reading order as the model traversal) with a proper `![alt](assets/…)`
-/// reference. Occurrences that cannot be found are left untouched.
+/// Best-effort restoration of inline image references: anydoc renders an
+/// embedded image as its alt text on a line of its own, so walk the rendered
+/// Markdown line by line and replace the next line whose trimmed content
+/// EXACTLY equals the image's alt text (reading order). A bare substring
+/// `find` would corrupt body text that merely contains the same word.
 fn restore_image_references(markdown: String, refs: &[(String, String)]) -> String {
-    let mut out = markdown;
-    let mut search_from = 0usize;
+    if refs.is_empty() {
+        return markdown;
+    }
+    let mut lines: Vec<String> = markdown.lines().map(|l| l.to_string()).collect();
+    let mut cursor = 0usize;
     for (alt, rel_path) in refs {
         let needle = alt.trim();
-        if needle.is_empty() || search_from >= out.len() {
+        if needle.is_empty() {
             continue;
         }
-        if let Some(pos) = out[search_from..].find(needle) {
-            let start = search_from + pos;
-            let end = start + needle.len();
+        let matched = (cursor..lines.len()).find(|&i| lines[i].trim() == needle);
+        if let Some(i) = matched {
             let label = needle.replace('[', "\\[").replace(']', "\\]");
-            let replacement = format!("![{label}]({rel_path})");
-            out.replace_range(start..end, &replacement);
-            search_from = start + replacement.len();
+            lines[i] = format!("![{label}]({rel_path})");
+            cursor = i + 1;
         }
+    }
+    let mut out = lines.join("\n");
+    if markdown.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
     }
     out
 }
@@ -223,6 +251,18 @@ impl DocumentEngine for AnyDocEngine {
         report(0.05, "正在读取文件…");
 
         let source = Path::new(&task.source_path);
+        let source_meta = std::fs::metadata(source)
+            .map_err(|e| conv_error(ErrorCode::IoError, format!("读取源文件失败: {e}")))?;
+        if source_meta.len() > MAX_SOURCE_BYTES {
+            return Err(conv_error(
+                ErrorCode::Unsupported,
+                format!(
+                    "文件过大（{} MB），超出转换上限（{} MB）",
+                    source_meta.len() / (1024 * 1024),
+                    MAX_SOURCE_BYTES / (1024 * 1024)
+                ),
+            ));
+        }
         let bytes = std::fs::read(source)
             .map_err(|e| conv_error(ErrorCode::IoError, format!("读取源文件失败: {e}")))?;
         let size_bytes = bytes.len() as u64;
@@ -328,7 +368,7 @@ impl DocumentEngine for AnyDocEngine {
                 std::fs::create_dir_all(dir)
                     .map_err(|e| conv_error(ErrorCode::IoError, format!("创建图片目录失败: {e}")))?;
                 for w in &written {
-                    std::fs::write(dir.join(&w.file_name), &w.asset.bytes).map_err(|e| {
+                    write_atomic(&dir.join(&w.file_name), &w.asset.bytes).map_err(|e| {
                         conv_error(
                             ErrorCode::IoError,
                             format!("写入图片 {} 失败: {e}", w.file_name),
@@ -341,7 +381,7 @@ impl DocumentEngine for AnyDocEngine {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| conv_error(ErrorCode::IoError, format!("创建输出目录失败: {e}")))?;
             }
-            std::fs::write(&md_path, &markdown)
+            write_atomic(&md_path, markdown.as_bytes())
                 .map_err(|e| conv_error(ErrorCode::IoError, format!("写入 Markdown 失败: {e}")))?;
             md_path
         };
@@ -357,7 +397,17 @@ impl DocumentEngine for AnyDocEngine {
             &format!("{format:?}"),
             size_bytes,
         );
-        document.assets = written.iter().map(|w| w.asset.clone()).collect();
+        // `document` 只会被序列化发给前端，而 `Asset::bytes` 是
+        // `#[serde(skip)]`：这里复制元数据即可，省去一份完整的图片字节拷贝。
+        document.assets = written
+            .iter()
+            .map(|w| Asset {
+                name: w.asset.name.clone(),
+                extension: w.asset.extension.clone(),
+                bytes: Vec::new(),
+                media_type: w.asset.media_type.clone(),
+            })
+            .collect();
 
         Ok(ConversionResult {
             task_id: task.id.clone(),
@@ -421,5 +471,17 @@ mod tests {
         let restored = restore_image_references(md, &refs);
         assert!(restored.contains("![logo](assets/image-001.png)"));
         assert!(restored.contains("![logo](assets/image-002.png)"));
+    }
+
+    #[test]
+    fn restore_does_not_touch_body_text_mentioning_alt() {
+        // 正文句子里出现的同名词不是图片占位，必须保持原样。
+        let md = "the logo is iconic\nlogo\ntail".to_string();
+        let refs = vec![("logo".to_string(), "assets/image-001.png".to_string())];
+        let restored = restore_image_references(md, &refs);
+        assert_eq!(
+            restored,
+            "the logo is iconic\n![logo](assets/image-001.png)\ntail"
+        );
     }
 }

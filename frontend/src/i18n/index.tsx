@@ -1,4 +1,11 @@
-import { createContext, useContext, useState, useMemo, ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useMemo,
+  ReactNode,
+} from "react";
 import { zhCN } from "./locales/zh-CN";
 import { en } from "./locales/en";
 
@@ -43,18 +50,34 @@ function interpolate(value: string, vars?: TranslationVars): string {
   return out;
 }
 
-function readStoredLocale(): Locale {
+function detectDefaultLocale(): Locale {
   try {
     const saved = localStorage.getItem("omnimd_locale");
     if (saved && saved in locales) return saved as Locale;
   } catch {
     // ignore
   }
-  return "zh-CN";
+  // No stored preference: follow the OS/browser language (zh* → zh-CN, else en).
+  const navLang = typeof navigator !== "undefined" ? navigator.language : "";
+  return navLang.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+}
+
+/** Module-level locale so non-React code (stores, api helpers) can translate. */
+let activeLocale: Locale = detectDefaultLocale();
+
+/** Hook-free translator for use outside React components (zustand stores, etc). */
+export function translate(path: string, vars?: TranslationVars): string {
+  return interpolate(getNestedValue(locales[activeLocale], path), vars);
 }
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(readStoredLocale);
+  const [locale, setLocaleState] = useState<Locale>(activeLocale);
+
+  // Keep <html lang> in sync so screen readers and spellcheck follow the UI
+  // language (also covers the initial load).
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   const t = useMemo(
     () => (path: string, vars?: TranslationVars) =>
@@ -67,6 +90,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       t,
       locale,
       setLocale: (l: Locale) => {
+        activeLocale = l;
         setLocaleState(l);
         try {
           localStorage.setItem("omnimd_locale", l);

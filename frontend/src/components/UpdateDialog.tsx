@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { AlertCircle, Download, Loader2, RotateCw, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { useUpdateStore } from "../store/useUpdateStore";
@@ -21,13 +21,46 @@ export function UpdateDialog() {
     closeDialog,
   } = useUpdateStore();
 
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Focus management: move focus into the dialog on open (keyboard/a11y) and
+  // restore it to the previously focused element on close. While open, Tab is
+  // trapped inside the panel.
   useEffect(() => {
     if (!dialogOpen) return;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    panelRef.current?.focus();
+
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeDialog();
+      if (e.key === "Escape") {
+        closeDialog();
+        return;
+      }
+      if (e.key === "Tab" && panelRef.current) {
+        const focusables = panelRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || active === panelRef.current)) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus();
+    };
   }, [dialogOpen, closeDialog]);
 
   if (!dialogOpen) return null;
@@ -41,10 +74,12 @@ export function UpdateDialog() {
       onClick={closeDialog}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={t("update.title")}
-        className="w-full max-w-md rounded-xl border border-border bg-background shadow-2xl flex flex-col animate-fade-in"
+        tabIndex={-1}
+        className="w-full max-w-md rounded-xl border border-border bg-background shadow-2xl flex flex-col animate-fade-in outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-3 p-5 pb-3">

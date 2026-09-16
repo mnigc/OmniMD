@@ -1,9 +1,10 @@
-import { memo, useMemo, type ComponentProps } from "react";
+import { memo, useMemo, type ComponentProps, type MouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeSlug from "rehype-slug";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useI18n } from "../i18n";
 
 interface MarkdownPreviewProps {
@@ -14,6 +15,31 @@ interface MarkdownPreviewProps {
  *  re-parses the whole HAST tree through a full HTML parser and is by far the
  *  most expensive plugin — skip it entirely for documents without markup. */
 const HAS_HTML_RE = /<[a-zA-Z][^>]*>/;
+
+/**
+ * External links must go through the Tauri opener plugin instead of the
+ * webview's default navigation (which would try to navigate the app window).
+ * Only http/https/mailto are allowed; anything else (and relative/anchor
+ * hrefs) keeps the default in-preview behavior. If opener fails (e.g. not
+ * running under Tauri), fall back to window.open.
+ */
+function handleAnchorClick(e: MouseEvent<HTMLAnchorElement>, href?: string) {
+  if (!href) return;
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return; // relative / anchor link — default behavior
+  }
+  const protocol = url.protocol;
+  if (protocol !== "http:" && protocol !== "https:" && protocol !== "mailto:") {
+    return;
+  }
+  e.preventDefault();
+  openUrl(href).catch(() => {
+    window.open(href, "_blank", "noopener,noreferrer");
+  });
+}
 
 /**
  * Sanitize schema: the GitHub default (which already strips scripts, event
@@ -113,6 +139,7 @@ function MarkdownPreviewImpl({ content }: MarkdownPreviewProps) {
                 className="text-primary hover:underline"
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={(e) => handleAnchorClick(e, href)}
               >
                 {children}
               </a>

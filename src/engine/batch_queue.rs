@@ -48,14 +48,24 @@ fn emit_summary(app: &tauri::AppHandle) {
 }
 
 fn insert_batch(app: &tauri::AppHandle, id: &str, source: &str, output: &str, now: u64) {
-    if let Ok(db) = crate::db::db(app) {
-        let _ = db.insert_batch_task(id, source, output, now);
+    match crate::db::db(app) {
+        Ok(db) => {
+            if let Err(e) = db.insert_batch_task(id, source, output, now) {
+                tracing::warn!("批量任务落库失败（任务记录将丢失）: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("打开数据库失败，无法落库批量任务: {e}"),
     }
 }
 
 fn update_status(app: &tauri::AppHandle, id: &str, status: &str, error: Option<&str>, elapsed: u64) {
-    if let Ok(db) = crate::db::db(app) {
-        let _ = db.update_batch_task_status(id, status, error, elapsed);
+    match crate::db::db(app) {
+        Ok(db) => {
+            if let Err(e) = db.update_batch_task_status(id, status, error, elapsed) {
+                tracing::warn!("批量任务状态更新失败（{id} -> {status}）: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("打开数据库失败，无法更新任务状态: {e}"),
     }
 }
 
@@ -201,7 +211,9 @@ let active = active_tasks.lock().await.len();
 
                     // Only fetch as many pending rows as there is room for, so the
                     // in-flight count never exceeds the configured concurrency.
-                    let room = (concurrency - active).max(1) as u64;
+                    // `saturating_sub` guards against a concurrent lowering of the
+                    // concurrency limit between the snapshot and this subtraction.
+                    let room = concurrency.saturating_sub(active).max(1) as u64;
                     let pending = get_pending(&app, room);
 
                     if pending.is_empty() {
@@ -514,12 +526,23 @@ let active = active_tasks.lock().await.len();
     }
 
     pub async fn clear_done(&self, app: &tauri::AppHandle) -> Result<(), String> {
-        // "清空列表" is expected to clear the whole list. Remove every task
-        // except those actively Processing (the UI disables this action while
-        // a conversion is in flight), so pending duplicates can be removed.
+        // "清空列表" is expected to clear the whole list. Worker-claimed tasks
+        // live in `active_tasks`; cancel them first so their threads exit
+        // cooperatively instead of writing status back to already-deleted rows
+        // (a harmless but wasteful no-op write). The UI disables this action
+        // while conversions are in flight, so normally this set is empty except
+        // for the brief claim window race.
+        let mut active = self.active_tasks.lock().await;
+        for (_, cancellation) in active.drain() {
+            cancellation.cancel();
+        }
+        drop(active);
+
         if let Ok(db) = crate::db::db(app) {
-for status in ["Pending", "Completed", "Cancelled", "Failed"] {
-                let _ = db.delete_batch_tasks(status);
+            for status in ["Pending", "Completed", "Cancelled", "Failed"] {
+                if let Err(e) = db.delete_batch_tasks(status) {
+                    tracing::warn!("清理批量任务记录失败（{status}）: {e}");
+                }
             }
         }
         emit_summary(app);

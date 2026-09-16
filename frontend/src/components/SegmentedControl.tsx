@@ -33,6 +33,8 @@ export function SegmentedControl<T extends string>({
           key={opt.value}
           onClick={() => onChange(opt.value)}
           title={opt.label}
+          aria-label={opt.label}
+          aria-pressed={value === opt.value}
           className={cn(
             "flex items-center justify-center rounded-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             size === "sm" ? "h-7 w-8" : "h-8 w-9",

@@ -30,6 +30,13 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
+import {
   Card,
   CardContent,
   CardHeader,
@@ -112,9 +119,11 @@ export function HomePage() {
   }, []);
 
   const inferOutputDir = useCallback(
-    (path: string): string => {
-      if (outputLocationMode === "custom") return defaultOutputDir || ".";
-      return path.replace(/\\/g, "/").split("/").slice(0, -1).join("/") || ".";
+    (path: string): string | null => {
+      // 返回 null 表示无法确定输出目录（自定义目录未设置/路径无父目录）：
+      // 不能把 "." 这样的相对路径交给后端，行为未定义。
+      if (outputLocationMode === "custom") return defaultOutputDir || null;
+      return path.replace(/\\/g, "/").split("/").slice(0, -1).join("/") || null;
     },
     [defaultOutputDir, outputLocationMode]
   );
@@ -134,6 +143,10 @@ export function HomePage() {
         if (active.has(path)) continue;
         active.add(path);
         const dir = inferOutputDir(path);
+        if (!dir) {
+          showToast(t("toast.outputDirMissing"), 3000, "error");
+          continue;
+        }
         const fileName = path.split(/[\\/]/).pop() || "output";
         const outputName = fileName.replace(/\.[^.]+$/, ".md");
         const outputPath = `${dir}/${outputName}`;
@@ -145,7 +158,7 @@ export function HomePage() {
       await useBatchStore.getState().refreshTasks();
       await useBatchStore.getState().refreshSummary();
     },
-    [inferOutputDir, enqueue]
+    [inferOutputDir, enqueue, t]
   );
 
   const addInputPaths = useCallback(
@@ -221,19 +234,46 @@ export function HomePage() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      <div className="flex-1 min-h-0 w-full max-w-5xl mx-auto flex flex-col gap-3 p-4">
+      <div className="flex-1 min-h-0 w-full max-w-5xl mx-auto flex flex-col gap-4 p-5">
         {/* Hero — title / selling points / supported formats, stacked */}
         <div className="shrink-0">
-          <h1 className="text-lg font-semibold tracking-tight">
+          <h1 className="text-xl font-semibold tracking-tight">
             {t("home.title")}
           </h1>
-          <div className="mt-1">
+          <div className="mt-2.5">
             <SellingPoints />
           </div>
-          <p className="mt-1 text-xs text-muted-foreground/80 break-words">
-            {t("home.supportedFormats")}
-            {supportedFormats.map((f) => f.toUpperCase()).join(" / ")}
-          </p>
+          <div className="mt-2.5 flex items-center flex-wrap gap-x-1 gap-y-1.5">
+            <span className="text-xs text-muted-foreground/80 mr-1.5">
+              {t("home.supportedFormats")}
+            </span>
+            {supportedFormats.slice(0, 12).map((f) => (
+              <span
+                key={f}
+                className="inline-flex items-center h-5 px-1.5 rounded-md bg-muted/60 border border-border/50 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/90"
+              >
+                {f}
+              </span>
+            ))}
+            {supportedFormats.length > 12 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center h-5 px-1.5 rounded-md bg-primary/10 border border-primary/25 text-[10px] font-medium text-primary cursor-default">
+                    {t("home.formatsMore", { n: supportedFormats.length - 12 })}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" align="start" className="max-w-64">
+                  <div className="flex flex-wrap gap-x-2 gap-y-1">
+                    {supportedFormats.slice(12).map((f) => (
+                      <span key={f} className="tabular-nums tracking-wide">
+                        {f.toUpperCase()}
+                      </span>
+                    ))}
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
         </div>
 
         {/* Card 1: 添加文件 — horizontal, compact */}
@@ -250,15 +290,21 @@ export function HomePage() {
               <Label className="text-xs text-muted-foreground whitespace-nowrap">
                 {t("batch.concurrency")}
               </Label>
-              <select
-                value={concurrency}
-                onChange={(e) => setConcurrency(Number(e.target.value))}
-                className="h-7 rounded border border-border bg-background px-2 text-xs"
+              <Select
+                value={String(concurrency)}
+                onValueChange={(v) => setConcurrency(Number(v))}
               >
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
+                <SelectTrigger className="h-7 w-16 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="flex items-center gap-2">
@@ -339,7 +385,18 @@ export function HomePage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={clearDone}
+                  onClick={async () => {
+                    // 清空会同时删除后端任务记录，与全项目其他删除操作
+                    // 一样需要确认。
+                    if (
+                      await confirmDialog(
+                        t("home.clearSessionConfirm"),
+                        t("home.clearSession")
+                      )
+                    ) {
+                      clearDone();
+                    }
+                  }}
                   disabled={totalTasks === 0 || hasProcessing}
                   title={t("home.clearSession")}
                   className="h-7 w-7"
@@ -349,10 +406,14 @@ export function HomePage() {
               </div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <StatusChip icon={Loader2} count={processingCount} label={t("taskStatus.processing")} color="text-primary" spin />
-              <StatusChip icon={CheckCircle2} count={completedCount} label={t("taskStatus.completed")} color="text-success" />
-              <StatusChip icon={XCircle} count={failedCount} label={t("taskStatus.failed")} color="text-destructive" />
-              <StatusChip icon={AlertTriangle} count={pendingCount} label={t("taskStatus.pending")} color="text-warning" />
+              {totalTasks > 0 && (
+                <>
+                  <StatusChip icon={Loader2} count={processingCount} label={t("taskStatus.processing")} color="text-primary" spin />
+                  <StatusChip icon={CheckCircle2} count={completedCount} label={t("taskStatus.completed")} color="text-success" />
+                  <StatusChip icon={XCircle} count={failedCount} label={t("taskStatus.failed")} color="text-destructive" />
+                  <StatusChip icon={AlertTriangle} count={pendingCount} label={t("taskStatus.pending")} color="text-warning" />
+                </>
+              )}
             </div>
           </CardHeader>
 
@@ -372,9 +433,21 @@ export function HomePage() {
                 {t("home.cancel")}
               </Button>
             ) : (
-              <Button className="w-full" onClick={start} disabled={pendingCount === 0 || loading}>
+              <Button
+                variant={pendingCount > 0 ? "default" : "secondary"}
+                className={cn(
+                  "w-full",
+                  pendingCount > 0 &&
+                    "bg-gradient-to-r from-primary to-violet-500 shadow-cta hover:brightness-110 hover:from-primary hover:to-violet-500"
+                )}
+                onClick={start}
+                disabled={pendingCount === 0 || loading}
+              >
                 <Play size={14} />
                 {t("home.startConversion")}
+                {pendingCount > 0 && (
+                  <span className="tabular-nums opacity-80">({pendingCount})</span>
+                )}
               </Button>
             )}
           </CardContent>
@@ -382,7 +455,9 @@ export function HomePage() {
           <CardContent className="flex-1 min-h-0 p-0 flex flex-col">
             {totalTasks === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-center h-full">
-                <Inbox className="mx-auto mb-3 text-muted-foreground/40" size={32} />
+                <div className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/15 flex items-center justify-center mb-4">
+                  <Inbox size={24} className="text-primary/70" />
+                </div>
                 <p className="text-sm font-medium">{t("home.noFilesInSession")}</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {t("dropzone.dropFilesOrFolder")}

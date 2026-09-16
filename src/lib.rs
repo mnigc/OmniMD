@@ -193,11 +193,25 @@ async fn convert_file(
 
     let state = get_state(&app)?;
     let cancellation = Cancellation::new();
+    // 两个并发转换可能携带相同的 client_task_id（前端跨会话复用 id），直接
+    // 以相同 key insert 会覆盖前一个任务的取消句柄使其永远无法取消。key
+    // 冲突时改用新 UUID 作为注册表键，任务对外 id 不变。
+    let cancel_key = {
+        let guard = state
+            .cancellations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if guard.contains_key(&task.id) {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            task.id.clone()
+        }
+    };
     state
         .cancellations
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(task.id.clone(), cancellation.clone());
+        .insert(cancel_key.clone(), cancellation.clone());
     emit_progress(&app, &task);
 
     // Create a progress callback that emits events to the frontend.
@@ -251,13 +265,13 @@ async fn convert_file(
                 task.status = TaskStatus::Cancelled;
                 task.error = Some("任务已取消".to_string());
                 emit_status(&app, &task);
-                cleanup_cancellation(&state, &task.id);
+                cleanup_cancellation(&state, &cancel_key);
                 return Err("cancelled".to_string());
             }
             task.status = TaskStatus::Failed;
             task.error = Some(e.message.clone());
             emit_status(&app, &task);
-            cleanup_cancellation(&state, &task.id);
+            cleanup_cancellation(&state, &cancel_key);
             return Err(format!("[{:?}]: {}", e.code, e.message));
         }
     };
@@ -266,7 +280,7 @@ async fn convert_file(
     task.progress = 1.0;
     emit_progress(&app, &task);
     emit_status(&app, &task);
-    cleanup_cancellation(&state, &task.id);
+    cleanup_cancellation(&state, &cancel_key);
 
     Ok(result_to_dto(&result))
 }
@@ -295,12 +309,12 @@ async fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), Strin
     }
     if cancelled {
         tracing::info!("Cancel requested for task {}", task_id);
+        Ok(())
     } else {
         // Not a single-file task: fall back to the batch queue so the same API
         // can cancel batch tasks (avoids frontend having to pick the right one).
-        let _ = state.batch_queue.cancel_task(&app, &task_id).await;
+        state.batch_queue.cancel_task(&app, &task_id).await
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -351,21 +365,31 @@ async fn scan_workspace(app: tauri::AppHandle, id: i64) -> Result<ScanResultDto,
 }
 
 #[tauri::command]
-fn list_documents(
+async fn list_documents(
     app: tauri::AppHandle,
     workspace_id: i64,
     folder: Option<String>,
 ) -> Result<Vec<DocumentDto>, String> {
-    db_handle(&app)?.list_documents(workspace_id, folder.as_deref())
+    // 移出主线程：大工作区单次加载上千行，且扫描事务提交期间 DB 锁会被
+    // 短暂占用，同步命令在主线程执行会冻结 UI。
+    tauri::async_runtime::spawn_blocking(move || {
+        db_handle(&app)?.list_documents(workspace_id, folder.as_deref())
+    })
+    .await
+    .map_err(|e| format!("后台任务异常退出: {e}"))?
 }
 
 #[tauri::command]
-fn list_subfolders(
+async fn list_subfolders(
     app: tauri::AppHandle,
     workspace_id: i64,
     folder: Option<String>,
 ) -> Result<Vec<FolderDto>, String> {
-    db_handle(&app)?.list_subfolders(workspace_id, folder.as_deref())
+    tauri::async_runtime::spawn_blocking(move || {
+        db_handle(&app)?.list_subfolders(workspace_id, folder.as_deref())
+    })
+    .await
+    .map_err(|e| format!("后台任务异常退出: {e}"))?
 }
 
 #[tauri::command]
@@ -375,7 +399,8 @@ fn list_favorites(app: tauri::AppHandle, workspace_id: i64) -> Result<Vec<Docume
 
 #[tauri::command]
 fn list_recent(app: tauri::AppHandle, workspace_id: Option<i64>, limit: Option<i64>) -> Result<Vec<DocumentDto>, String> {
-    db_handle(&app)?.list_recent(workspace_id, limit.unwrap_or(20))
+    // clamp：SQLite 的 LIMIT 负值语义是"不限制"，会拉全表。
+    db_handle(&app)?.list_recent(workspace_id, limit.unwrap_or(20).clamp(1, 500))
 }
 
 // Library DB writes run off the main thread: sync commands execute there and
@@ -415,7 +440,7 @@ async fn search_documents(
     // Also kept off the main thread: while a big scan transaction commits,
     // the DB mutex can be briefly contended and must never block the UI.
     tauri::async_runtime::spawn_blocking(move || {
-        db_handle(&app)?.search(&query, workspace_id, limit.unwrap_or(50))
+        db_handle(&app)?.search(&query, workspace_id, limit.unwrap_or(50).clamp(1, 500))
     })
     .await
     .map_err(|e| format!("检索任务异常退出: {e}"))?
@@ -426,14 +451,15 @@ async fn search_documents(
 /// executable, because the install directory is not writable for a normal
 /// user after an MSI install (Program Files).
 #[tauri::command]
-fn get_default_output_dir(app: tauri::AppHandle) -> String {
+fn get_default_output_dir(app: tauri::AppHandle) -> Result<String, String> {
     let base = app
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir());
     let out = base.join("output");
-    let _ = std::fs::create_dir_all(&out);
-    out.to_string_lossy().replace("\\", "/").to_string()
+    // 创建失败必须报错而不是返回一个无效路径，否则后续转换才在半路失败。
+    std::fs::create_dir_all(&out).map_err(|e| format!("创建默认输出目录失败: {e}"))?;
+    Ok(out.to_string_lossy().replace("\\", "/").to_string())
 }
 
 /// Open the given directory in the system file manager.
@@ -518,16 +544,48 @@ fn get_app_version(app: tauri::AppHandle) -> String {
     format!("v{}", app.package_info().version)
 }
 
+/// 单次写入/读取文本的大小上限：防止异常巨大的内容整块进内存或写盘。
+const WRITE_TEXT_MAX_BYTES: usize = 20 * 1024 * 1024;
+const READ_TEXT_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// 原子写入：先写 `<path>.tmp` 再 rename，进程在写入中途崩溃也不会留下
+/// 截断的目标文件。Windows 上 rename 无法覆盖已存在目标，先删目标再
+/// rename（两个操作之间的窗口极短）。
+fn write_text_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    fs::write(&tmp, bytes).map_err(|e| format!("写入文件失败: {e}"))?;
+    if path.exists() {
+        if let Err(e) = fs::remove_file(path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!("替换文件失败: {e}"));
+        }
+    }
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("写入文件失败: {e}")
+    })
+}
+
 #[tauri::command]
 fn write_text_file(path: String, content: String) -> Result<(), String> {
     ensure_text_path(&path)?;
-    fs::write(&path, &content).map_err(|e| format!("写入文件失败: {}", e))
+    if content.len() > WRITE_TEXT_MAX_BYTES {
+        return Err("内容过大，超出可保存上限（20MB）".to_string());
+    }
+    write_text_atomic(std::path::Path::new(&path), content.as_bytes())
 }
 
 #[tauri::command]
 fn read_text_file(path: String) -> Result<String, String> {
     ensure_text_path(&path)?;
-    fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {}", e))
+    if let Ok(meta) = fs::metadata(&path) {
+        if meta.len() > READ_TEXT_MAX_BYTES {
+            return Err("文件过大（超过 10MB），暂不支持在编辑器中打开".to_string());
+        }
+    }
+    fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {e}"))
 }
 
 #[tauri::command]
@@ -553,10 +611,18 @@ async fn batch_enqueue(
     output_path: String,
 ) -> Result<String, String> {
     let state = get_state(&app)?;
-    state
+    let id = state
         .batch_queue
         .enqueue(app.clone(), source_path, output_path)
-        .await
+        .await?;
+    // 封堵 enqueue 与 worker 退出的竞态：worker 在队列看起来为空的瞬间
+    // 置 running=false 退出；若本次 enqueue 恰好落在其后且没有随后的
+    // batch_start，任务将永远滞留 Pending。
+    if !state.batch_queue.is_running() {
+        let engine = state.queue_engine();
+        state.batch_queue.start(app.clone(), engine).await;
+    }
+    Ok(id)
 }
 
 #[tauri::command]
@@ -649,8 +715,50 @@ fn rotate_log(path: &std::path::Path) {
     if let Ok(meta) = std::fs::metadata(path) {
         if meta.len() > LOG_MAX_BYTES {
             let backup = path.with_extension("log.1");
+            let _ = std::fs::remove_file(&backup);
             let _ = std::fs::rename(path, &backup);
         }
+    }
+}
+
+/// File writer that rotates inline when the live log exceeds `LOG_MAX_BYTES`.
+/// 启动时的一次性 rotate_log 覆盖不到长会话，这里在写入路径上检查并轮转：
+/// rename 当前文件后重新打开（句柄会跟随被改名的文件），rename 失败（被
+/// 杀毒软件等占用）时退化为截断，保证日志不会无限增长。
+#[derive(Clone)]
+struct RotatingFileWriter {
+    path: std::path::PathBuf,
+    file: Arc<Mutex<fs::File>>,
+}
+
+impl io::Write for RotatingFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut f = self.file.lock().unwrap_or_else(|e| e.into_inner());
+        let over_limit = f
+            .metadata()
+            .map(|m| m.len() > LOG_MAX_BYTES)
+            .unwrap_or(false);
+        if over_limit {
+            let backup = self.path.with_extension("log.1");
+            let _ = std::fs::remove_file(&backup);
+            if std::fs::rename(&self.path, &backup).is_ok() {
+                if let Ok(nf) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.path)
+                {
+                    *f = nf;
+                }
+            } else {
+                // append 模式下后续写入始终落在文件末尾，截断即重置。
+                let _ = f.set_len(0);
+            }
+        }
+        f.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.lock().unwrap_or_else(|e| e.into_inner()).flush()
     }
 }
 
@@ -665,13 +773,25 @@ fn init_logging() {
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = log_dir.join("omnimd.log");
     rotate_log(&log_path);
-    let file = std::fs::File::create(&log_path).ok();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .ok();
 
     // BoxMakeWriter unifies the two writer types so both match arms share one
-    // concrete type.
+    // concrete type. The closure form satisfies `MakeWriter` (Fn() -> W);
+    // the writer is Clone (Arc<Mutex<File>>), so every write call gets a
+    // handle to the same rotating file.
     use tracing_subscriber::fmt::writer::BoxMakeWriter;
     let writer: BoxMakeWriter = match file {
-        Some(f) => BoxMakeWriter::new(f),
+        Some(f) => {
+            let rotating = RotatingFileWriter {
+                path: log_path,
+                file: Arc::new(Mutex::new(f)),
+            };
+            BoxMakeWriter::new(move || rotating.clone())
+        }
         None => BoxMakeWriter::new(io::stdout),
     };
 
@@ -754,13 +874,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             // Forward file-path argv from the shell context menu to the frontend.
             if !cli_args.is_empty() {
                 let _ = app.emit("argv-files", &cli_args);
             }
             // Mark stale Processing tasks from a previous session as Failed.
-            let _ = db::reconcile_stale_batch_tasks(app.handle());
+            if let Err(e) = db::reconcile_stale_batch_tasks(app.handle()) {
+                tracing::warn!("清理上次会话遗留任务状态失败: {e}");
+            }
             Ok(())
         })
         .manage(AppState::default())

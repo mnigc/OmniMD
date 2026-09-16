@@ -5,6 +5,7 @@ import {
   relaunchApp,
   type DownloadEvent,
 } from "../api/updater";
+import { translate } from "../i18n";
 
 export type UpdateStatus =
   | "idle"
@@ -24,6 +25,8 @@ interface UpdateState {
   date: string | null;
   progress: number | null;
   error: string | null;
+  /** 错误来源：决定 Retry 按钮应重新检查还是重新安装。 */
+  errorPhase: "check" | "install" | null;
   dialogOpen: boolean;
 
   check: (options?: { silent?: boolean }) => Promise<void>;
@@ -41,6 +44,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   date: null,
   progress: null,
   error: null,
+  errorPhase: null,
   dialogOpen: false,
 
   /**
@@ -60,7 +64,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         set(
           silent
             ? { status: "idle" }
-            : { status: "up-to-date", version: null, notes: null, date: null }
+            : { status: "up-to-date", version: null, notes: null, date: null, errorPhase: null }
         );
         return;
       }
@@ -71,24 +75,34 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         notes: info.body ?? null,
         date: info.date ?? null,
         error: null,
+        errorPhase: null,
       });
     } catch (err) {
       // Offline, rate-limited, or a dev build without updater config: a
-      // background check must never nag the user about it.
-      set(
-        silent
-          ? { status: "idle" }
-          : {
-              status: "error",
-              error: err instanceof Error ? err.message : String(err),
-            }
-      );
+      // background check must never nag the user about it — and must never
+      // clobber an "available" result that a previous successful check found.
+      if (silent) {
+        if (get().status !== "available") set({ status: "idle" });
+        return;
+      }
+      set({
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+        errorPhase: "check",
+      });
     }
   },
 
   install: async () => {
-    if (get().status !== "available" && get().status !== "error") return;
-    set({ status: "downloading", progress: 0, error: null });
+    const state = get();
+    if (state.status !== "available" && state.status !== "error") return;
+    // check 阶段的失败（断网等）意味着更新句柄已被释放，Retry 走安装
+    // 只会再次报 "No pending update"——必须重新执行 check。
+    if (state.status === "error" && state.errorPhase === "check") {
+      await get().check();
+      return;
+    }
+    set({ status: "downloading", progress: 0, error: null, errorPhase: null });
 
     let downloaded = 0;
     let total: number | undefined;
@@ -120,12 +134,23 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         status: "error",
         progress: null,
         error: err instanceof Error ? err.message : String(err),
+        errorPhase: "install",
       });
     }
   },
 
   restart: async () => {
-    await relaunchApp();
+    try {
+      await relaunchApp();
+    } catch (err) {
+      // relaunch 失败（权限/环境问题）时按钮此前会静默无效：给出可见
+      // 错误，让用户知道需要手动重启。
+      set({
+        status: "error",
+        error: `${translate("update.relaunchFailed")}: ${err instanceof Error ? err.message : String(err)}`,
+        errorPhase: "install",
+      });
+    }
   },
 
   openDialog: () => set({ dialogOpen: true }),

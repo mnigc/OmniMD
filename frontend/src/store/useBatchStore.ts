@@ -11,12 +11,8 @@ import {
   batchListTasks,
   batchGetSummary,
   batchStart,
-  batchPauseTask,
-  batchResumeTask,
-  batchCancelTask,
   batchCancelAll,
   batchRetryFailed,
-  batchRetryTask,
   batchClearDone,
   batchSetConcurrency,
   batchEnqueue,
@@ -24,6 +20,7 @@ import {
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { showToast } from "../lib/toast";
+import { translate } from "../i18n";
 import { useTaskStore } from "./useTaskStore";
 import { useSettingsStore } from "./useSettingsStore";
 
@@ -38,11 +35,7 @@ interface BatchStore {
   refreshSummary: () => Promise<void>;
   enqueue: (sourcePath: string, outputPath: string) => Promise<string | null>;
   start: () => Promise<void>;
-  pauseTask: (taskId: string) => Promise<void>;
-  resumeTask: (taskId: string) => Promise<void>;
-  cancelTask: (taskId: string) => Promise<void>;
   cancelAll: () => Promise<void>;
-  retryTask: (taskId: string) => Promise<void>;
   retryFailed: () => Promise<void>;
   clearDone: () => Promise<void>;
   listenForEvents: () => Promise<() => void>;
@@ -122,7 +115,7 @@ export const useBatchStore = create<BatchStore>((set, get) => {
         return id;
       } catch (e) {
         showToast(
-          e instanceof Error ? e.message : "Failed to queue file",
+          e instanceof Error ? e.message : translate("toast.batchQueueFailed"),
           3000,
           "error",
         );
@@ -142,7 +135,7 @@ export const useBatchStore = create<BatchStore>((set, get) => {
         await get().refreshSummary();
       } catch (e) {
         showToast(
-          e instanceof Error ? e.message : "Failed to start conversion",
+          e instanceof Error ? e.message : translate("toast.batchStartFailed"),
           3000,
           "error",
         );
@@ -151,54 +144,16 @@ export const useBatchStore = create<BatchStore>((set, get) => {
       }
     },
 
-    pauseTask: async (taskId) => {
-      try {
-        await batchPauseTask(taskId);
-        await get().refreshTasks();
-        await get().refreshSummary();
-      } catch {
-        // ignore
-      }
-    },
-
-    resumeTask: async (taskId) => {
-      try {
-        await batchResumeTask(taskId);
-        await get().refreshTasks();
-        await get().refreshSummary();
-      } catch {
-        // ignore
-      }
-    },
-
-    cancelTask: async (taskId) => {
-      try {
-        await batchCancelTask(taskId);
-        await get().refreshTasks();
-        await get().refreshSummary();
-      } catch {
-        // ignore
-      }
-    },
-
     cancelAll: async () => {
       try {
         await batchCancelAll();
         await get().refreshTasks();
         await get().refreshSummary();
-      } catch {
-        // ignore
-      }
-    },
-
-    retryTask: async (taskId) => {
-      try {
-        await batchRetryTask(taskId);
-        await get().refreshTasks();
-        await get().refreshSummary();
       } catch (e) {
         showToast(
-          e instanceof Error ? e.message : "Failed to retry task",
+          e instanceof Error
+            ? e.message
+            : translate("toast.batchCancelAllFailed"),
           3000,
           "error",
         );
@@ -212,7 +167,9 @@ export const useBatchStore = create<BatchStore>((set, get) => {
         await get().refreshSummary();
       } catch (e) {
         showToast(
-          e instanceof Error ? e.message : "Failed to retry failed tasks",
+          e instanceof Error
+            ? e.message
+            : translate("toast.batchRetryFailed"),
           3000,
           "error",
         );
@@ -226,7 +183,9 @@ export const useBatchStore = create<BatchStore>((set, get) => {
         await get().refreshSummary();
       } catch (e) {
         showToast(
-          e instanceof Error ? e.message : "Failed to clear tasks",
+          e instanceof Error
+            ? e.message
+            : translate("toast.batchClearFailed"),
           3000,
           "error",
         );
@@ -263,7 +222,9 @@ export const useBatchStore = create<BatchStore>((set, get) => {
               ...(p.status === "Completed" ? { progress: 1 } : {}),
             });
             void recordHistory(p.taskId, p.status, p.error);
-            void get().refreshSummary();
+            // Summary is pushed by the backend's `batch-summary` event
+            // (listened below); an extra `refreshSummary` IPC per terminal
+            // status event is redundant.
           },
         );
         unlisteners.push(un2);

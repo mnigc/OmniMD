@@ -97,18 +97,18 @@ const dropHandledNatively = useRef(false);
       }
     } catch (err) {
       console.error("File picker failed:", err);
-      showToast(t("toast.filePickFailed"), 3000);
+      showToast(t("toast.filePickFailed"), 3000, "error");
     }
   }, [formats, onFiles, t]);
 
   const openFolderPicker = useCallback(async () => {
     if (!onFolder) return;
     try {
-      const dir = await pickDir();
+      const dir = await pickDir(t("home.chooseFolder"));
       if (dir) onFolder(dir);
     } catch (err) {
       console.error("Folder picker failed:", err);
-      showToast(t("toast.folderPickFailed"), 3000);
+      showToast(t("toast.folderPickFailed"), 3000, "error");
     }
   }, [onFolder, t]);
 
@@ -196,10 +196,10 @@ const dropHandledNatively = useRef(false);
     >
       <div
         className={cn(
-          "p-2.5 rounded-lg shrink-0 transition-all duration-300",
+          "p-2.5 rounded-lg shrink-0 transition-all duration-300 border",
           isDragging
-            ? "bg-primary/15 text-primary scale-110"
-            : "bg-muted/60 text-muted-foreground group-hover:text-primary group-hover:bg-primary/10"
+            ? "bg-primary/15 text-primary scale-110 border-primary/30"
+            : "bg-gradient-to-br from-primary/12 to-primary/[0.03] text-primary/80 border-primary/15 group-hover:from-primary/20 group-hover:text-primary"
         )}
       >
         {isDragging ? (

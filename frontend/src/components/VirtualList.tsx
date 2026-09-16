@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "../lib/utils";
 
@@ -28,6 +28,12 @@ export function VirtualList<T>({
   itemKey,
 }: VirtualListProps<T>) {
   const parentRef = useRef<HTMLDivElement>(null);
+  // Signature of the current items' keys: the scroll reset below must fire
+  // only when the LIST itself is replaced (folder switch, tab change, search
+  // cleared), not when a caller clones the array for an in-place field update
+  // (e.g. marking a document's openedAt) — that used to yank the scroll back
+  // to the top on every item click.
+  const keysSignatureRef = useRef<string | null>(null);
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
@@ -36,6 +42,18 @@ export function VirtualList<T>({
     gap,
     getItemKey: itemKey ? (index) => itemKey(items[index], index) : undefined,
   });
+
+  // 列表整体更换（换文件夹、切 tab、清空搜索）时复位滚动：旧偏移量在
+  // 变短的列表上会被 clamp，出现白屏或定位错乱。以 itemKey 序列判断列表
+  // 是否真的换了，键集合不变的原地字段更新不复位。
+  useEffect(() => {
+    const signature = items
+      .map((item, index) => (itemKey ? itemKey(item, index) : index))
+      .join("\n");
+    if (signature === keysSignatureRef.current) return;
+    keysSignatureRef.current = signature;
+    if (parentRef.current) parentRef.current.scrollTop = 0;
+  }, [items, itemKey]);
 
   return (
     <div ref={parentRef} className={cn("overflow-auto", className)}>

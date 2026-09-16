@@ -12,6 +12,10 @@ type ToastPayload = {
 
 const EVENT = "omnimd-toast";
 
+/** Max simultaneously visible toasts; older ones are dropped when exceeded so
+ *  a burst of failures (e.g. batch enqueue) can't flood the screen. */
+const MAX_VISIBLE_TOASTS = 5;
+
 let nextId = 0;
 
 export function showToast(
@@ -39,32 +43,44 @@ function ToastIcon({ variant }: { variant: ToastVariant }) {
 }
 
 export function ToastPortal() {
-  const [toast, setToast] = useState<ToastPayload | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [toasts, setToasts] = useState<ToastPayload[]>([]);
+  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   useEffect(() => {
+    const dismiss = (id: number) => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    };
     const handler = (e: CustomEvent<ToastPayload>) => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      setToast(e.detail);
-      timerRef.current = setTimeout(() => setToast(null), e.detail.duration);
+      const toast = e.detail;
+      // Each toast keeps its own timer; keep only the newest MAX_VISIBLE_TOASTS.
+      setToasts((prev) => [...prev, toast].slice(-MAX_VISIBLE_TOASTS));
+      const timer = setTimeout(() => {
+        timersRef.current.delete(timer);
+        dismiss(toast.id);
+      }, toast.duration);
+      timersRef.current.add(timer);
     };
     window.addEventListener(EVENT, handler as EventListener);
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
       window.removeEventListener(EVENT, handler as EventListener);
+      for (const timer of timersRef.current) clearTimeout(timer);
+      timersRef.current.clear();
     };
   }, []);
 
-  if (!toast) return null;
+  if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none">
-      <div
-        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium shadow-lg ${VARIANT_STYLES[toast.variant]}`}
-      >
-        <ToastIcon variant={toast.variant} />
-        <span>{toast.message}</span>
-      </div>
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none flex flex-col items-center gap-2">
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium shadow-lg ${VARIANT_STYLES[toast.variant]}`}
+        >
+          <ToastIcon variant={toast.variant} />
+          <span>{toast.message}</span>
+        </div>
+      ))}
     </div>
   );
 }

@@ -10,7 +10,7 @@
 //! The markdown *content* itself is never stored as the source of truth:
 //! documents live on disk, the DB only keeps metadata + the search index.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -115,6 +115,8 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE INDEX IF NOT EXISTS idx_documents_workspace ON documents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_documents_favorite  ON documents(workspace_id, favorite);
 CREATE INDEX IF NOT EXISTS idx_documents_opened    ON documents(workspace_id, opened_at);
+-- 用于目录浏览（list_documents/list_subfolders）与迁移冲突探针的路径范围扫描。
+CREATE INDEX IF NOT EXISTS idx_documents_ws_path   ON documents(workspace_id, path);
 
 -- Full-text index (rowid aligned with documents.id).
 -- Body/title/tags are pre-tokenized with CJK bigrams before insertion,
@@ -166,20 +168,44 @@ impl WorkspaceDb {
     /// plain drive paths. Idempotent — the WHERE clause matches nothing once
     /// every row has been fixed.
     fn migrate_legacy_paths(&self) -> rusqlite::Result<()> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, path FROM documents WHERE path LIKE '//?/%'")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, path FROM documents WHERE path LIKE '//?/%'",
+        )?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
         if rows.is_empty() {
             return Ok(());
         }
-        for (id, bad) in rows {
+        for (id, workspace_id, bad) in rows {
             let fixed = strip_extended_prefix(&bad);
-            self.conn
-                .execute("UPDATE documents SET path = ?1 WHERE id = ?2", params![fixed, id])?;
+            // `UNIQUE(workspace_id, path)`：若同 workspace 下已有同 path 的行，
+            // 直接 UPDATE 会让迁移在每次 open 时失败，数据库从此打不开。
+            // 此时旧行是重复索引，删除（连同 FTS 行）而不是改写。
+            let conflict: Option<i64> = self
+                .conn
+                .query_row(
+                    "SELECT id FROM documents WHERE workspace_id = ?1 AND path = ?2 AND id != ?3",
+                    params![workspace_id, fixed, id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if conflict.is_some() {
+                self.conn
+                    .execute("DELETE FROM documents_fts WHERE rowid = ?1", params![id])?;
+                self.conn
+                    .execute("DELETE FROM documents WHERE id = ?1", params![id])?;
+            } else {
+                self.conn
+                    .execute("UPDATE documents SET path = ?1 WHERE id = ?2", params![fixed, id])?;
+            }
         }
         Ok(())
     }
@@ -323,8 +349,17 @@ impl WorkspaceDb {
     /// so a huge root (an entire drive) cannot starve every other command.
     pub fn scan_workspace(&self, workspace_id: i64) -> Result<ScanResultDto, String> {
         let (root, existing) = self.load_scan_baseline(workspace_id)?;
-        let plan = build_scan_plan(&root, &existing, |_| {})?;
-        self.apply_scan_plan(workspace_id, &existing, plan)
+        let mut result = ScanResultDto::default();
+        build_scan_plan(&root, &existing, |_| {}, |batch| {
+            let (updated, indexed, removed) =
+                self.apply_scan_batch(workspace_id, &batch.updates, &batch.inserts, &batch.removals)?;
+            result.updated += updated;
+            result.indexed += indexed;
+            result.removed += removed;
+            Ok(())
+        })?;
+        result.total = self.doc_count(workspace_id)?;
+        Ok(result)
     }
 
     /// Phase A of a scan: load the workspace row and the current index
@@ -349,9 +384,29 @@ impl WorkspaceDb {
         plan: ScanPlan,
     ) -> Result<ScanResultDto, String> {
         let mut result = ScanResultDto::default();
+        let (updated, indexed, removed) =
+            self.apply_scan_batch(workspace_id, &plan.updates, &plan.inserts, &plan.removals)?;
+        result.updated = updated;
+        result.indexed = indexed;
+        result.removed = removed;
+        let _ = existing;
+        result.total = self.doc_count(workspace_id)?;
+        Ok(result)
+    }
+
+    /// 在一个短事务内写入一批扫描记录，返回 (updated, indexed, removed)。
+    /// 供 [`apply_scan_plan`] 与分批 flush（`build_scan_plan` 的回调）共用，
+    /// 避免把最多 10 万个文件的 bigram 全部堆在内存里最后才刷库。
+    fn apply_scan_batch(
+        &self,
+        workspace_id: i64,
+        updates: &[ScanUpdate],
+        inserts: &[ScanInsert],
+        removals: &[i64],
+    ) -> Result<(usize, usize, usize), String> {
         let tx = self.conn.unchecked_transaction().map_err(err)?;
 
-        for u in &plan.updates {
+        for u in updates {
             if u.update_content {
                 tx.execute(
                     "UPDATE documents SET title = ?1, file_size = ?2, mtime = ?3, source = ?4
@@ -376,10 +431,9 @@ impl WorkspaceDb {
                 )
                 .map_err(err)?;
             }
-            result.updated += 1;
         }
 
-        for d in &plan.inserts {
+        for d in inserts {
             tx.execute(
                 "INSERT INTO documents
                      (workspace_id, path, title, file_size, mtime, favorite, source, created_at)
@@ -401,21 +455,17 @@ impl WorkspaceDb {
                 params![id, d.title_bigram, d.body_bigram, d.tags_bigram],
             )
             .map_err(err)?;
-            result.indexed += 1;
         }
 
-        for id in &plan.removals {
+        for id in removals {
             tx.execute("DELETE FROM documents_fts WHERE rowid = ?1", params![id])
                 .map_err(err)?;
             tx.execute("DELETE FROM documents WHERE id = ?1", params![id])
                 .map_err(err)?;
-            result.removed += 1;
         }
 
-        let _ = existing;
         tx.commit().map_err(err)?;
-        result.total = self.doc_count(workspace_id)?;
-        Ok(result)
+        Ok((updates.len(), inserts.len(), removals.len()))
     }
 
     fn indexed_docs(&self, workspace_id: i64) -> Result<BTreeMap<String, (i64, i64, i64)>, String> {
@@ -456,11 +506,26 @@ impl WorkspaceDb {
     ) -> Result<Vec<DocumentDto>, String> {
         let root = self.workspace_root(workspace_id)?;
         let target = normalize_folder(folder);
-        Ok(self
-            .all_docs(workspace_id)?
-            .into_iter()
-            .filter(|d| parent_of_rel(&d.path, &root) == target)
-            .collect())
+        // SQL 级过滤：path 落在 `root/target/` 前缀内的所有后代文档（递归，
+        // 与树上 doc_count 徽章的语义一致——点进文件夹应看到徽章数字那么多
+        // 文档）。用范围扫描而非 LIKE，路径里的 %/_ 不会干扰匹配；大工作区
+        // 不再整表载入内存过滤。
+        let prefix = folder_prefix(&root, &target);
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, workspace_id, path, title, file_size, favorite, source, created_at, opened_at
+                 FROM documents
+                 WHERE workspace_id = ?1 AND path >= ?2 || '/' AND path < ?2 || '0'
+                 ORDER BY title COLLATE NOCASE",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(params![workspace_id, prefix], row_to_document)
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        Ok(rows)
     }
 
     pub fn list_subfolders(
@@ -470,37 +535,34 @@ impl WorkspaceDb {
     ) -> Result<Vec<FolderDto>, String> {
         let root = self.workspace_root(workspace_id)?;
         let target = normalize_folder(folder);
-        let mut counts: BTreeMap<String, i64> = BTreeMap::new();
-        // Prefix identifying "any file under `target`", e.g. "" (root) or "sub/".
-        let prefix = if target.is_empty() {
-            String::new()
-        } else {
-            format!("{target}/")
-        };
-        for doc in self.all_docs(workspace_id)? {
-            let Some(rel) = rel_of(&doc.path, &root) else {
-                continue;
-            };
-            if !prefix.is_empty() && !rel.starts_with(&prefix) {
-                continue;
-            }
-            // First path segment *after* the target folder. Only a *nested*
-            // path segment denotes a subfolder; a single-segment remainder is a
-            // file directly inside `target`. Deriving this from the indexed
-            // path avoids a filesystem `is_dir()` probe per document (which
-            // would otherwise block the global DB lock).
-            let rest = if prefix.is_empty() {
-                rel.as_str()
-            } else {
-                &rel[prefix.len()..]
-            };
-            if let Some((first, tail)) = rest.split_once('/') {
-                if !first.is_empty() && !tail.is_empty() {
-                    *counts.entry(first.to_string()).or_insert(0) += 1;
-                }
-            }
-        }
-        Ok(counts
+        // 与 list_documents 相同的前缀范围，但按"target 之下的第一段路径"
+        // 分组计数。只统计嵌套段（剩余部分含 '/'），与旧的内存过滤语义一致。
+        let prefix = folder_prefix(&root, &target);
+        // SQLite substr() 按字符计数，而 str::len() 是字节数——工作区路径含
+        // 中文时（CJK 每 char 3 bytes）按字节算偏移会切进第一段目录名，
+        // "content-main" 会被截成 "main"。必须用字符数。
+        let offset = prefix.chars().count() as i64 + 2;
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT substr(rel, 1, instr(rel, '/') - 1) AS name, COUNT(*) AS cnt
+                 FROM (
+                     SELECT substr(path, ?3) AS rel
+                     FROM documents
+                     WHERE workspace_id = ?1 AND path >= ?2 || '/' AND path < ?2 || '0'
+                 )
+                 WHERE instr(rel, '/') > 0
+                 GROUP BY name ORDER BY name",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(params![workspace_id, prefix, offset], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        Ok(rows
             .into_iter()
             .map(|(name, doc_count)| FolderDto {
                 path: if target.is_empty() {
@@ -589,68 +651,138 @@ impl WorkspaceDb {
 
     // -- full-text search ----------------------------------------------------
 
-    /// FTS5 search over the active workspace. Queries are CJK-bigram-tokenized
-    /// on the Rust side, so multi-character Chinese terms match naturally.
+    /// Search over the active workspace. Content goes through FTS5 (queries
+    /// are CJK-bigram-tokenized on the Rust side); the document title (file
+    /// stem) is matched as a plain substring. Title hits rank above content
+    /// hits; a document matching both keeps its content snippet.
     pub fn search(
         &self,
         query: &str,
         workspace_id: i64,
         limit: i64,
     ) -> Result<Vec<SearchHitDto>, String> {
-        let tokens = query_tokens(query);
-        if tokens.is_empty() {
+        let query = query.trim();
+        if query.is_empty() {
             return Ok(Vec::new());
         }
-        // Quote every token (they are already sanitized to alphanumerics/CJK)
-        // and join with space => AND semantics.
-        let match_expr = tokens
-            .iter()
-            .map(|t| format!("\"{t}\""))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let tokens = query_tokens(query);
 
+        // -- content hits (FTS) -------------------------------------------
+        // Quote every token (they are already sanitized to alphanumerics/CJK)
+        // and join with space => AND semantics. Tokens may be empty (e.g. a
+        // single ASCII letter is not bigram material) — the FTS pass is then
+        // skipped but the title pass below still runs.
+        let mut content_hits: Vec<SearchHitDto> = Vec::new();
+        if !tokens.is_empty() {
+            let match_expr = tokens
+                .iter()
+                .map(|t| format!("\"{t}\""))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT d.id, d.workspace_id, d.path, d.title, d.file_size,
+                            d.favorite, d.source, d.created_at, d.opened_at,
+                            snippet(documents_fts, -1, ?4, ?5, '…', 24)
+                     FROM documents_fts
+                     JOIN documents d ON d.id = documents_fts.rowid
+                     WHERE documents_fts MATCH ?1 AND d.workspace_id = ?2
+                     ORDER BY rank
+                     LIMIT ?3",
+                )
+                .map_err(err)?;
+            // Sentinel markers instead of literal `<mark>` so the snippet text can
+            // be HTML-escaped first, then have the markers restored. This keeps the
+            // frontend's `dangerouslySetInnerHTML` from ever receiving raw document
+            // HTML.
+            content_hits = stmt
+                .query_map(
+                    params![match_expr, workspace_id, limit, MARK_OPEN, MARK_CLOSE],
+                    |r| {
+                    let doc = DocumentDto {
+                        id: r.get(0)?,
+                        workspace_id: r.get(1)?,
+                        path: r.get(2)?,
+                        title: r.get(3)?,
+                        file_size: r.get(4)?,
+                        favorite: r.get::<_, i64>(5)? != 0,
+                        source: r.get(6)?,
+                        created_at: r.get(7)?,
+                        opened_at: r.get(8)?,
+                    };
+                    let raw: String = r.get(9)?;
+                    Ok(SearchHitDto {
+                        document: doc,
+                        snippet: Some(escape_snippet(&raw)),
+                    })
+                })
+                .map_err(err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(err)?;
+        }
+
+        // -- title hits (file-name substring) ------------------------------
+        // Escape LIKE wildcards so "%"/"_" in the query match literally.
+        let mut pattern = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        pattern.insert_str(0, "%");
+        pattern.push('%');
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT d.id, d.workspace_id, d.path, d.title, d.file_size,
-                        d.favorite, d.source, d.created_at, d.opened_at,
-                        snippet(documents_fts, -1, ?4, ?5, '…', 24)
-                 FROM documents_fts
-                 JOIN documents d ON d.id = documents_fts.rowid
-                 WHERE documents_fts MATCH ?1 AND d.workspace_id = ?2
-                 ORDER BY rank
+                "SELECT id, workspace_id, path, title, file_size, favorite, source, created_at, opened_at
+                 FROM documents
+                 WHERE workspace_id = ?1 AND title LIKE ?2 ESCAPE '\\'
+                 ORDER BY title COLLATE NOCASE
                  LIMIT ?3",
             )
             .map_err(err)?;
-        // Sentinel markers instead of literal `<mark>` so the snippet text can
-        // be HTML-escaped first, then have the markers restored. This keeps the
-        // frontend's `dangerouslySetInnerHTML` from ever receiving raw document
-        // HTML.
-        let rows = stmt
-            .query_map(
-                params![match_expr, workspace_id, limit, MARK_OPEN, MARK_CLOSE],
-                |r| {
-                let doc = DocumentDto {
-                    id: r.get(0)?,
-                    workspace_id: r.get(1)?,
-                    path: r.get(2)?,
-                    title: r.get(3)?,
-                    file_size: r.get(4)?,
-                    favorite: r.get::<_, i64>(5)? != 0,
-                    source: r.get(6)?,
-                    created_at: r.get(7)?,
-                    opened_at: r.get(8)?,
-                };
-                let raw: String = r.get(9)?;
+        let title_hits = stmt
+            .query_map(params![workspace_id, pattern, limit], |r| {
                 Ok(SearchHitDto {
-                    document: doc,
-                    snippet: Some(escape_snippet(&raw)),
+                    document: DocumentDto {
+                        id: r.get(0)?,
+                        workspace_id: r.get(1)?,
+                        path: r.get(2)?,
+                        title: r.get(3)?,
+                        file_size: r.get(4)?,
+                        favorite: r.get::<_, i64>(5)? != 0,
+                        source: r.get(6)?,
+                        created_at: r.get(7)?,
+                        opened_at: r.get(8)?,
+                    },
+                    snippet: None,
                 })
             })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
-        Ok(rows)
+
+        // -- merge: title hits first, no duplicates, capped at limit --------
+        // A document that matches both stays in the title group but keeps its
+        // content snippet from the FTS pass; the bare title row is dropped.
+        let title_ids: HashSet<i64> = title_hits.iter().map(|h| h.document.id).collect();
+        let mut both: Vec<SearchHitDto> = Vec::new();
+        let mut rest: Vec<SearchHitDto> = Vec::new();
+        for hit in content_hits {
+            if title_ids.contains(&hit.document.id) {
+                both.push(hit);
+            } else {
+                rest.push(hit);
+            }
+        }
+        let both_ids: HashSet<i64> = both.iter().map(|h| h.document.id).collect();
+        let mut merged: Vec<SearchHitDto> = Vec::with_capacity(both.len() + title_hits.len() + rest.len());
+        merged.extend(both);
+        merged.extend(
+            title_hits
+                .into_iter()
+                .filter(|h| !both_ids.contains(&h.document.id)),
+        );
+        merged.extend(rest);
+        merged.truncate(limit as usize);
+        Ok(merged)
     }
 
     // -- batch tasks ---------------------------------------------------------
@@ -846,22 +978,6 @@ impl WorkspaceDb {
             .map(|w| w.path)
             .ok_or_else(|| "工作区不存在".to_string())
     }
-
-    fn all_docs(&self, workspace_id: i64) -> Result<Vec<DocumentDto>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, workspace_id, path, title, file_size, favorite, source, created_at, opened_at
-                 FROM documents WHERE workspace_id = ?1 ORDER BY title COLLATE NOCASE",
-            )
-            .map_err(err)?;
-        let rows = stmt
-            .query_map(params![workspace_id], row_to_document)
-            .map_err(err)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(err)?;
-        Ok(rows)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -954,23 +1070,17 @@ fn strip_extended_prefix(path: &str) -> String {
     stripped.replace('\\', "/")
 }
 
-fn rel_of(path: &str, root: &str) -> Option<String> {
-    Path::new(path)
-        .strip_prefix(Path::new(root))
-        .ok()
-        .map(|r| r.to_string_lossy().replace('\\', "/"))
-}
-
-/// Direct parent directory of `path` relative to `root`, or "" for root level.
-fn parent_of_rel(path: &str, root: &str) -> String {
-    rel_of(path, root)
-        .and_then(|rel| {
-            Path::new(&rel)
-                .parent()
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-        })
-        .filter(|p| !p.is_empty() && *p != ".")
-        .unwrap_or_default()
+/// list_documents / list_subfolders 的 SQL 前缀：`root[/target]`（root 去掉
+/// 尾部 '/'）。配合 `path >= prefix || '/' AND path < prefix || '0'` 可精确
+/// 匹配"位于该目录之下"的所有文档（'0' 是 '/' + 1），不受路径中 `%`/`_`
+/// 等 LIKE 通配符影响。
+fn folder_prefix(root: &str, target: &str) -> String {
+    let root = root.trim_end_matches('/');
+    if target.is_empty() {
+        root.to_string()
+    } else {
+        format!("{root}/{target}")
+    }
 }
 
 fn normalize_folder(folder: Option<&str>) -> String {
@@ -999,6 +1109,9 @@ const SCAN_MAX_DEPTH: u32 = 48;
 /// Files larger than this are indexed by name only; their body is not
 /// bigram-tokenized (reading + tokenizing hundreds of MB would stall a pass).
 const SCAN_MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
+/// 分批落库的批大小：build_scan_plan 每积累这么多条记录就 flush 一次，
+/// 避免整个工作区的 bigram 全部堆在内存里。
+const SCAN_FLUSH_BATCH: usize = 500;
 
 /// Directory names that are never worth indexing. Compared lowercased; the
 /// dot-prefix rule handles VCS/hidden dirs separately.
@@ -1094,11 +1207,16 @@ struct ScanInsert {
 /// Phase B of a scan: walk the workspace root and read ONLY new/changed
 /// files. Runs without the DB lock — this is the slow part (filesystem +
 /// content + bigram tokenization) and must never starve other commands.
+///
+/// 内存上限：每积累约 [`SCAN_FLUSH_BATCH`] 个文件就通过 `flush` 在一个短事务
+/// 内落库并清空缓冲，因此最多 10 万个文件的 bigram 不会全部堆在内存里。
+/// 计数由调用方在 `flush` 回调中跨批累加，最终一致性不受影响。
 fn build_scan_plan(
     root: &Path,
     existing: &BTreeMap<String, (i64, i64, i64)>,
     mut on_progress: impl FnMut(usize),
-) -> Result<ScanPlan, String> {
+    mut flush: impl FnMut(ScanPlan) -> Result<(), String>,
+) -> Result<(), String> {
     let mut files = Vec::new();
     let mut budget = SCAN_MAX_FILES;
     collect_md_files(root, 0, &mut budget, &mut files);
@@ -1135,42 +1253,42 @@ fn build_scan_plan(
                     tags_bigram: String::new(),
                     update_content: false,
                 });
-                continue;
+            } else {
+                let content = match std::fs::read_to_string(file) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        // Unreadable / non-UTF8 (e.g. GBK): refresh size+mtime only
+                        // and keep whatever index already exists for this file.
+                        plan.updates.push(ScanUpdate {
+                            id,
+                            title: String::new(),
+                            size,
+                            mtime,
+                            source: None,
+                            title_bigram: String::new(),
+                            body_bigram: String::new(),
+                            tags_bigram: String::new(),
+                            update_content: false,
+                        });
+                        continue;
+                    }
+                };
+                let (title, source, tags, body) = extract_meta(&content, file);
+                let title_bigram = cjk_bigram(&title);
+                let body_bigram = cjk_bigram(&body);
+                let tags_bigram = cjk_bigram(&tags.join(" "));
+                plan.updates.push(ScanUpdate {
+                    id,
+                    title,
+                    size,
+                    mtime,
+                    source,
+                    title_bigram,
+                    body_bigram,
+                    tags_bigram,
+                    update_content: true,
+                });
             }
-            let content = match std::fs::read_to_string(file) {
-                Ok(c) => c,
-                Err(_) => {
-                    // Unreadable / non-UTF8 (e.g. GBK): refresh size+mtime only
-                    // and keep whatever index already exists for this file.
-                    plan.updates.push(ScanUpdate {
-                        id,
-                        title: String::new(),
-                        size,
-                        mtime,
-                        source: None,
-                        title_bigram: String::new(),
-                        body_bigram: String::new(),
-                        tags_bigram: String::new(),
-                        update_content: false,
-                    });
-                    continue;
-                }
-            };
-            let (title, source, tags, body) = extract_meta(&content, file);
-            let title_bigram = cjk_bigram(&title);
-            let body_bigram = cjk_bigram(&body);
-            let tags_bigram = cjk_bigram(&tags.join(" "));
-            plan.updates.push(ScanUpdate {
-                id,
-                title,
-                size,
-                mtime,
-                source,
-                title_bigram,
-                body_bigram,
-                tags_bigram,
-                update_content: true,
-            });
         } else {
             // Oversized new files: index by filename so they are still
             // listed/browsable, just not full-text searchable.
@@ -1198,6 +1316,11 @@ fn build_scan_plan(
                 tags_bigram,
             });
         }
+
+        // 批次已满：先落库再继续，避免计划在内存中无界增长。
+        if plan.updates.len() + plan.inserts.len() >= SCAN_FLUSH_BATCH {
+            flush(std::mem::take(&mut plan))?;
+        }
     }
 
     // Removals are judged against the disk (not this walk), so a capped walk
@@ -1207,7 +1330,11 @@ fn build_scan_plan(
             plan.removals.push(*id);
         }
     }
-    Ok(plan)
+    // Flush the remaining tail (including removals).
+    if !plan.updates.is_empty() || !plan.inserts.is_empty() || !plan.removals.is_empty() {
+        flush(plan)?;
+    }
+    Ok(())
 }
 
 fn file_stem_title(path: &Path) -> String {
@@ -1233,20 +1360,26 @@ pub fn scan_workspace_background(
         handle.load_scan_baseline(workspace_id)?
     };
 
-    // Phase B — NO lock. The guard above is already dropped here.
+    // Phase B — NO lock. The guard above is already dropped here. Each batch
+    // is flushed in its own short transaction (Phase C inline), so the plan
+    // never accumulates the whole workspace's bigrams in memory.
     let app_for_cb = app.clone();
-    let plan = build_scan_plan(&root, &existing, move |processed| {
+    let mut result = ScanResultDto::default();
+    build_scan_plan(&root, &existing, move |processed| {
         let _ = app_for_cb.emit(
             "workspace-scan-progress",
             serde_json::json!({ "workspaceId": workspace_id, "processed": processed }),
         );
-    })?;
-
-    // Phase C — short lock again.
-    let result = {
+    }, |batch| {
         let handle = db(app)?;
-        handle.apply_scan_plan(workspace_id, &existing, plan)?
-    };
+        let (updated, indexed, removed) =
+            handle.apply_scan_batch(workspace_id, &batch.updates, &batch.inserts, &batch.removals)?;
+        result.updated += updated;
+        result.indexed += indexed;
+        result.removed += removed;
+        Ok(())
+    })?;
+    result.total = db(app)?.doc_count(workspace_id)?;
 
     let _ = app.emit(
         "workspace-scan-progress",
@@ -1488,19 +1621,22 @@ mod tests {
 
         let db = WorkspaceDb::open(&db_path).unwrap();
 
-        let ws_dir = dir.join("docs");
-        fs::create_dir_all(ws_dir.join("sub")).unwrap();
+        // 工作区根路径刻意包含中文：list_subfolders 曾按字节数算 substr 偏移，
+        // CJK 根路径会把第一段目录名（如 "content-main"）截成 "main"。
+        let ws_dir = dir.join("测试数据/docs");
+        fs::create_dir_all(ws_dir.join("sub/deep")).unwrap();
         fs::write(
             ws_dir.join("a.md"),
             "---\ntitle: 人工智能报告\nsource: https://example.com/a\n---\n人工智能在医疗文档中的应用。\n",
         )
         .unwrap();
         fs::write(ws_dir.join("sub/b.md"), "# 医疗影像\n影像分析技术概述。\n").unwrap();
+        fs::write(ws_dir.join("sub/deep/c.md"), "# 深层文档\n正文。\n").unwrap();
 
         let ws = db.add_workspace("测试库", ws_dir.to_str().unwrap()).unwrap();
         let scan = db.scan_workspace(ws.id).unwrap();
-        assert_eq!(scan.indexed, 2);
-        assert_eq!(scan.total, 2);
+        assert_eq!(scan.indexed, 3);
+        assert_eq!(scan.total, 3);
 
         // 二次扫描应为增量无变更
         let scan = db.scan_workspace(ws.id).unwrap();
@@ -1535,13 +1671,34 @@ mod tests {
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, hits[0].document.id);
 
+        // 文件名搜索："c" 是单字符，不参与 FTS 分词，只能按 title 命中
+        let by_name = db.search("c", ws.id, 10).unwrap();
+        assert_eq!(by_name.len(), 1);
+        assert_eq!(by_name[0].document.title, "c");
+        assert!(by_name[0].snippet.is_none());
+
+        // 纯内容命中（b.md 的 title 是文件干 "b"，不含关键词）仍有摘要
+        let by_content = db.search("影像", ws.id, 10).unwrap();
+        assert_eq!(by_content.len(), 1);
+        assert!(by_content[0].snippet.is_some());
+
+        // 内容 + 文件名同时命中（a.md：title "人工智能报告" + 正文）只出现一次
+        let both = db.search("人工智能", ws.id, 10).unwrap();
+        assert_eq!(both.len(), 1);
+        assert!(both[0].snippet.is_some());
+
         // 目录浏览
+        // 目录浏览：文档列表是递归的（含所有子目录），与徽章计数一致；
+        // 子文件夹首段名不得被 CJK 路径的字节/字符偏移截断
         let folders = db.list_subfolders(ws.id, None).unwrap();
         assert_eq!(folders.len(), 1);
         assert_eq!(folders[0].name, "sub");
-        assert_eq!(folders[0].doc_count, 1);
-        assert_eq!(db.list_documents(ws.id, None).unwrap().len(), 1);
-        assert_eq!(db.list_documents(ws.id, Some("sub")).unwrap().len(), 1);
+        assert_eq!(folders[0].doc_count, 2);
+        let root_docs = db.list_documents(ws.id, None).unwrap();
+        assert_eq!(root_docs.len(), 3);
+        let sub_docs = db.list_documents(ws.id, Some("sub")).unwrap();
+        assert_eq!(sub_docs.len(), 2);
+        assert!(sub_docs.iter().any(|d| d.path.ends_with("deep/c.md")));
 
         // 删除工作区（级联清理文档 + FTS）
         db.remove_workspace(ws.id).unwrap();

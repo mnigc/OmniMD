@@ -1,4 +1,4 @@
-﻿import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   Copy,
   FileDown,
@@ -11,7 +11,6 @@ import {
   Loader2,
   AlertCircle,
   Image as ImageIcon,
-  Save,
   Table as TableIcon,
   Type,
 } from "lucide-react";
@@ -26,10 +25,13 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { useI18n } from "../i18n";
 import { Button } from "../components/ui/button";
 import { convertFile, writeTextFile, openFolder } from "../api/tauriApi";
+import { confirmDialog } from "../api/dialogs";
 import type { ConversionStats, ErrorDto } from "../types";
 import { save } from "@tauri-apps/plugin-dialog";
 import { dirname, resolve } from "@tauri-apps/api/path";
 import { showToast } from "../lib/toast";
+import { deriveStatsFromMarkdown } from "../lib/stats";
+import { cn } from "../lib/utils";
 import {
   Tooltip,
   TooltipContent,
@@ -256,6 +258,8 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [markdown, setMarkdown] = useState("");
   const [reconverting, setReconverting] = useState(false);
+  // 复制/另存类按钮的进行中状态，防止双击重复触发系统对话框。
+  const [busyAction, setBusyAction] = useState<"copy" | "copyPlain" | "save" | null>(null);
   // Kept in state (not a ref) so the toolbar re-renders once the editor view
   // is ready; a ref left the toolbar disabled until an unrelated re-render.
   const [editorView, setEditorView] = useState<EditorView | null>(null);
@@ -273,9 +277,16 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
   }, []);
 
   const autoSavePath = currentResult?.outputPath || currentTask?.outputPath || null;
-  const { saving, saveNow } = useAutoSave(markdown, autoSavePath);
+  const { saving, dirty, saveNow } = useAutoSave(markdown, autoSavePath);
 
-  const stats: ConversionStats | undefined = currentResult?.stats;
+  // 编辑后统计实时跟随内容；未编辑时用后端换算的原值，避免口径漂移。
+  const convertedMarkdown = currentResult?.markdown;
+  const stats = useMemo<ConversionStats | undefined>(() => {
+    if (!currentResult) return undefined;
+    return markdown !== convertedMarkdown
+      ? deriveStatsFromMarkdown(markdown)
+      : currentResult.stats;
+  }, [currentResult, markdown, convertedMarkdown]);
   const fileName =
     currentTask?.sourcePath.split(/[\\/]/).pop() || currentTask?.sourcePath || "";
   const hasError =
@@ -296,12 +307,14 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
-        saveNow();
+        // 直接读 CodeMirror 的当前内容：onChange 有 150ms 节流，state 可能
+        // 滞后最后几次键击，Ctrl+S 必须一字不差地落盘。
+        saveNow(editorView?.state.doc.toString());
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [saveNow]);
+  }, [saveNow, editorView]);
 
   const viewOptions: {
     value: ViewMode;
@@ -369,7 +382,11 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
         <div className="flex items-center gap-2 ml-auto">
           {autoSavePath && (
             <span className="text-xs text-muted-foreground">
-              {saving ? t("editor.saving") : t("editor.saved")}
+              {saving
+                ? t("editor.saving")
+                : dirty
+                  ? t("editor.unsaved")
+                  : t("editor.saved")}
             </span>
           )}
           <SegmentedControl
@@ -382,52 +399,58 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {(viewMode === "source" || viewMode === "split") && (
-          <div
-            className={`flex flex-col min-w-0 ${viewMode === "split" ? "border-r border-border" : ""}`}
-            style={
-              viewMode === "split"
-                ? { flex: "0 0 auto", width: `calc(${splitRatio * 100}% - 3px)` }
-                : { flex: "1 1 0%" }
-            }
-          >
-            <EditorToolbar view={editorView} />
-            <div className="flex-1 overflow-hidden">
-              <MarkdownEditor
-                value={markdown}
-                onChange={setMarkdown}
-                onViewReady={setEditorView}
-              />
-            </div>
+        <div
+          className={cn(
+            "flex flex-col min-w-0",
+            viewMode === "preview"
+              ? "hidden"
+              : viewMode === "split"
+                ? "border-r border-border"
+                : "flex-1"
+          )}
+          style={
+            viewMode === "split"
+              ? { flex: "0 0 auto", width: `calc(${splitRatio * 100}% - 3px)` }
+              : undefined
+          }
+        >
+          <EditorToolbar view={editorView} />
+          <div className="flex-1 overflow-hidden">
+            {/* 编辑器常驻挂载：切到预览再切回来不丢 undo 历史与光标。 */}
+            <MarkdownEditor
+              value={markdown}
+              onChange={setMarkdown}
+              onViewReady={setEditorView}
+              placeholder={t("convert.markdownPlaceholder")}
+            />
           </div>
-        )}
+        </div>
 
-        {viewMode === "split" && (
-          <SplitDivider onResize={handleSplitChange} />
-        )}
+        {viewMode === "split" && <SplitDivider onResize={handleSplitChange} />}
 
-        {(viewMode === "preview" || viewMode === "split") && (
-          <div
-            className="flex flex-col min-w-0"
-            style={
-              viewMode === "split"
-                ? { flex: "0 0 auto", width: `calc(${(1 - splitRatio) * 100}% - 3px)` }
-                : { flex: "1 1 0%" }
-            }
-          >
-            <div className="h-9 border-b border-border px-3 flex items-center gap-2 bg-muted/30">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t("convert.preview")}
-              </span>
-              <span className="text-xs text-muted-foreground ml-auto">
-                {currentResult.assetCount} {t("convert.assets")}
-              </span>
-            </div>
-            <div className="flex-1 overflow-auto">
-              <MarkdownPreview content={deferredMarkdown} />
-            </div>
+        <div
+          className={cn(
+            "flex flex-col min-w-0",
+            viewMode === "source" ? "hidden" : viewMode === "split" ? "" : "flex-1"
+          )}
+          style={
+            viewMode === "split"
+              ? { flex: "0 0 auto", width: `calc(${(1 - splitRatio) * 100}% - 3px)` }
+              : undefined
+          }
+        >
+          <div className="h-9 border-b border-border px-3 flex items-center gap-2 bg-muted/30">
+            <span className="text-xs font-medium text-muted-foreground">
+              {t("convert.preview")}
+            </span>
+            <span className="text-xs text-muted-foreground ml-auto">
+              {currentResult.assetCount} {t("convert.assets")}
+            </span>
           </div>
-        )}
+          <div className="flex-1 overflow-auto">
+            <MarkdownPreview content={deferredMarkdown} />
+          </div>
+        </div>
       </div>
 
       {hasError && (
@@ -438,7 +461,7 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
         />
       )}
 
-      {stats && !hasError && (
+      {stats && (
         <div className="border-t border-border bg-muted/20 px-4 py-2 flex items-center gap-4 shrink-0 overflow-x-auto">
           <Stat
             icon={<ImageIcon size={13} />}
@@ -462,12 +485,15 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
         <Button
           variant="outline"
           size="sm"
+          disabled={busyAction !== null}
           onClick={async () => {
-            if (!navigator.clipboard) {
-              showToast(t("convert.clipboardUnavailable"), 3000, "error");
-              return;
-            }
+            if (busyAction) return;
+            setBusyAction("copy");
             try {
+              if (!navigator.clipboard) {
+                showToast(t("convert.clipboardUnavailable"), 3000, "error");
+                return;
+              }
               await navigator.clipboard.writeText(markdown);
               showToast(t("toast.copied"), 2000);
             } catch (err) {
@@ -476,10 +502,16 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                 3000,
                 "error"
               );
+            } finally {
+              setBusyAction(null);
             }
           }}
         >
-          <Copy size={14} />
+          {busyAction === "copy" ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <Copy size={14} />
+          )}
           {t("convert.copyMarkdown")}
         </Button>
 
@@ -487,12 +519,15 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
           <Button
             variant="outline"
             size="sm"
+            disabled={busyAction !== null}
             onClick={async () => {
-              if (!navigator.clipboard) {
-                showToast(t("convert.clipboardUnavailable"), 3000, "error");
-                return;
-              }
+              if (busyAction) return;
+              setBusyAction("copyPlain");
               try {
+                if (!navigator.clipboard) {
+                  showToast(t("convert.clipboardUnavailable"), 3000, "error");
+                  return;
+                }
                 await navigator.clipboard.writeText(markdownToPlainText(markdown));
                 showToast(t("toast.copied"), 2000);
               } catch (err) {
@@ -501,10 +536,16 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                   3000,
                   "error"
                 );
+              } finally {
+                setBusyAction(null);
               }
             }}
           >
-            <Copy size={14} />
+            {busyAction === "copyPlain" ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Copy size={14} />
+            )}
             {t("convert.copyPlainText")}
           </Button>
         )}
@@ -513,12 +554,14 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
           <Button
             variant="outline"
             size="sm"
+            disabled={busyAction !== null}
             onClick={async () => {
-              if (!currentTask) return;
-              const sourceName =
-                currentTask.sourcePath.split(/[\\/]/).pop() || "output";
-              const defaultName = sourceName.replace(/\.[^.]+$/, ".md");
+              if (!currentTask || busyAction) return;
+              setBusyAction("save");
               try {
+                const sourceName =
+                  currentTask.sourcePath.split(/[\\/]/).pop() || "output";
+                const defaultName = sourceName.replace(/\.[^.]+$/, ".md");
                 const filePath = await save({
                   defaultPath: defaultName,
                   filters: [{ name: "Markdown", extensions: ["md"] }],
@@ -533,10 +576,16 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                   3000,
                   "error"
                 );
+              } finally {
+                setBusyAction(null);
               }
             }}
           >
-            <FileDown size={14} />
+            {busyAction === "save" ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <FileDown size={14} />
+            )}
             {t("convert.saveMd")}
           </Button>
         )}
@@ -566,6 +615,15 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
             disabled={reconverting}
             onClick={async () => {
               if (!currentTask || reconverting) return;
+              // 输出文件正是自动保存的目标：用户手动编辑过就先确认，
+              // 否则重新转换会静默覆盖已保存的修改。
+              if (dirty) {
+                const ok = await confirmDialog(
+                  t("convert.reconvertOverwriteConfirm"),
+                  t("convert.reconvert")
+                );
+                if (!ok) return;
+              }
               setReconverting(true);
               try {
                 const sourcePath = currentTask.sourcePath;

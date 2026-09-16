@@ -6,6 +6,8 @@ import type {
 } from "../types";
 
 const HISTORY_KEY = "omnimd_history";
+/** 历史记录上限：批量转换时每个终态事件都会写入，无上限会无限增长。 */
+const HISTORY_MAX = 200;
 
 function loadHistory(): HistoryEntry[] {
   try {
@@ -53,8 +55,13 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   addToHistory: (entry) => {
     set((state) => {
       // Deduplicate by id: a task may emit several terminal events, and the
-      // same task must not appear in history more than once.
-      const history = [entry, ...state.history.filter((e) => e.id !== entry.id)];
+      // same task must not appear in history more than once. Cap the list so
+      // a long session cannot grow storage (and each terminal event's
+      // synchronous serialize) without bound.
+      const history = [entry, ...state.history.filter((e) => e.id !== entry.id)].slice(
+        0,
+        HISTORY_MAX
+      );
       persistHistory(history);
       return { history };
     });

@@ -59,6 +59,7 @@ export function App() {
   }, [sidebarDefaultOpen]);
 
   const updateStatus = useUpdateStore((s) => s.status);
+  const updateDialogOpen = useUpdateStore((s) => s.dialogOpen);
   const updateVersion = useUpdateStore((s) => s.version);
   const openUpdateDialog = useUpdateStore((s) => s.openDialog);
 
@@ -187,18 +188,23 @@ export function App() {
     }
   }, [t]);
 
-  useGlobalShortcuts({
-    O: () => {
-      setPage("home");
+  useGlobalShortcuts(
+    {
+      O: () => {
+        setPage("home");
+      },
+      N: () => handleNewMarkdown(),
+      P: () => {
+        setPage("library");
+      },
+      "Shift+F": () => {
+        setPage("library");
+      },
     },
-    N: () => handleNewMarkdown(),
-    P: () => {
-      setPage("library");
-    },
-    "Shift+F": () => {
-      setPage("library");
-    },
-  });
+    // While the update dialog is modal, its own keys (Escape/Tab) must not be
+    // hijacked by global shortcuts.
+    !updateDialogOpen,
+  );
 
   const renderPage = () => {
     switch (page) {
@@ -231,12 +237,15 @@ export function App() {
         >
           <PanelLeft size={18} />
         </Button>
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-md bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
-            <span className="text-white font-bold text-xs">OM</span>
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 via-violet-600 to-indigo-600 ring-1 ring-white/25 shadow-sm flex items-center justify-center">
+            <span className="text-white font-bold text-[11px] tracking-wide">OM</span>
           </div>
-          <span className="font-semibold text-sm">
-            OmniMD - Anything to Markdown
+          <span className="font-semibold text-sm tracking-tight">
+            OmniMD
+            <span className="font-normal text-muted-foreground hidden lg:inline">
+              {"  "}·{"  "}Anything to Markdown
+            </span>
           </span>
         </div>
         <div className="ml-auto flex h-full items-stretch">
@@ -247,7 +256,7 @@ export function App() {
       <div className="flex flex-1 overflow-hidden">
         <aside
           className={cn(
-            "shrink-0 border-r border-border bg-muted/40 p-3 flex flex-col gap-1 overflow-hidden",
+            "shrink-0 border-r border-border bg-muted/30 p-2.5 flex flex-col gap-1 overflow-hidden",
             "transition-[width,padding] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]",
             sidebarOpen ? "w-52" : "w-14"
           )}
@@ -300,6 +309,11 @@ export function App() {
                     ? t("update.available", { version: updateVersion })
                     : t("update.title")
                 }
+                aria-label={
+                  updateVersion
+                    ? t("update.available", { version: updateVersion })
+                    : t("update.title")
+                }
                 className={cn(
                   "flex items-center gap-2 rounded-lg text-xs font-medium text-primary transition-colors hover:bg-primary/10",
                   sidebarOpen ? "px-3 py-2" : "justify-center px-0 py-2"
@@ -319,14 +333,11 @@ export function App() {
             )}
             <div
               className={cn(
-                "px-3 pt-2 border-t border-border text-xs text-muted-foreground",
+                "pt-2.5 mt-1 border-t border-border/70 text-[11px] text-muted-foreground/70 text-center",
                 !sidebarOpen && "hidden"
               )}
             >
-              <div className="flex justify-between mb-0.5">
-                <span>{t("home.phase1Mvp")}</span>
-                <span>{appVersion}</span>
-              </div>
+              <span className="tabular-nums">{appVersion}</span>
             </div>
           </div>
         </aside>
@@ -337,7 +348,7 @@ export function App() {
             title={t("app.crashed")}
             retryLabel={t("common.retry")}
           >
-            <div className="h-full w-full page-transition">{renderPage()}</div>
+            <div className="h-full w-full page-transition page-glow">{renderPage()}</div>
           </ErrorBoundary>
         </main>
       </div>

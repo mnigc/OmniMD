@@ -1,16 +1,9 @@
-﻿import {
-  FileText,
-  FolderOpen,
-  Link,
-  Play,
-  Trash2,
-} from "lucide-react";
+﻿import { FileText, Link } from "lucide-react";
 import type { TaskStatus } from "../types";
 import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
 import { Badge } from "./ui/badge";
 import { Progress } from "./ui/progress";
-import { Button } from "./ui/button";
 import {
   Tooltip,
   TooltipContent,
@@ -31,11 +24,6 @@ export interface TaskLike {
 interface TaskItemProps {
   task: TaskLike;
   compact?: boolean;
-  showActions?: boolean;
-  onStart?: (taskId: string) => void;
-  onRemove?: (taskId: string) => void;
-  onOpenFile?: (taskId: string) => void;
-  onOpenFolder?: (taskId: string) => void;
 }
 
 const statusKey: Record<string, string> = {
@@ -71,15 +59,7 @@ function StatusBadge({ status, label }: { status: string; label: string }) {
   return <Badge variant={statusBadgeVariant[status] ?? "secondary"}>{label}</Badge>;
 }
 
-export function TaskItem({
-  task,
-  compact,
-  showActions = true,
-  onStart,
-  onRemove,
-  onOpenFile,
-  onOpenFolder,
-}: TaskItemProps) {
+export function TaskItem({ task, compact }: TaskItemProps) {
   const { t } = useI18n();
   const isUrl = task.sourcePath.startsWith("http://") || task.sourcePath.startsWith("https://");
   const fileName = isUrl
@@ -184,74 +164,6 @@ export function TaskItem({
           </Tooltip>
         )}
       </div>
-
-      {showActions && (
-        <div className="flex items-center gap-0.5 shrink-0">
-          {task.status === "Pending" && onStart && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={() => onStart(task.id)}
-                >
-                  <Play size={14} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t("taskStatus.start")}</TooltipContent>
-            </Tooltip>
-          )}
-          {task.status === "Completed" && onOpenFile && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={() => onOpenFile(task.id)}
-                >
-                  <FileText size={14} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t("history.openFile")}</TooltipContent>
-            </Tooltip>
-          )}
-          {task.status === "Completed" && onOpenFolder && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={() => onOpenFolder(task.id)}
-                >
-                  <FolderOpen size={14} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t("history.openFolder")}</TooltipContent>
-            </Tooltip>
-          )}
-          {(task.status === "Completed" ||
-            task.status === "Cancelled" ||
-            task.status === "Failed") &&
-            onRemove && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={() => onRemove(task.id)}
-                  >
-                    <Trash2 size={14} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{t("history.delete")}</TooltipContent>
-              </Tooltip>
-            )}
-        </div>
-      )}
     </div>
   );
 }

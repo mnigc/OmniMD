@@ -68,6 +68,8 @@ export function countWords(markdown: string): number {
       }
     }
     latinBuf += " ";
+    // 行内代码不跨行：一个未闭合的反引号不能让余下整篇都被跳过计数。
+    inInlineCode = false;
   }
   flush();
   return count;

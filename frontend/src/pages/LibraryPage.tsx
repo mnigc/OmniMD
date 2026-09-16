@@ -43,7 +43,13 @@ import { writeTextFile } from "../api/tauriApi";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { ScrollArea } from "../components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import { VirtualList } from "../components/VirtualList";
 import { cn } from "../lib/utils";
 import { showToast } from "../lib/toast";
@@ -121,6 +127,50 @@ function displayPath(abs: string, wsRoot?: string): string {
   return abs.startsWith(norm) ? abs.slice(norm.length + 1) : abs;
 }
 
+/// 后端返回的 snippet 已整体 HTML 转义、仅保留 `<mark>` 高亮标记；这里再
+/// 做一道前端兜底：任何不属于 `<mark>`/`</mark>` 的 "<" 一律转为实体，
+/// 确保 dangerouslySetInnerHTML 永远收不到可执行的标签。
+function safeSnippetHtml(snippet: string): string {
+  return snippet.replace(/<(?!\/?mark>)/g, "&lt;");
+}
+
+const FOLDER_PANEL_WIDTH_KEY = "omnidm_folder_panel_width";
+const FOLDER_PANEL_MIN = 160;
+const FOLDER_PANEL_MAX = 480;
+const FOLDER_PANEL_DEFAULT = 208;
+
+function readStoredFolderPanelWidth(): number {
+  const n = Number(localStorage.getItem(FOLDER_PANEL_WIDTH_KEY));
+  return Number.isFinite(n) && n >= FOLDER_PANEL_MIN && n <= FOLDER_PANEL_MAX
+    ? n
+    : FOLDER_PANEL_DEFAULT;
+}
+
+/// Workspaces already auto-scanned during this app session. Module-level on
+/// purpose: it must survive LibraryPage unmount/remount when switching pages,
+/// which is exactly what used to re-trigger a full disk re-index.
+const sessionScannedWorkspaces = new Set<number>();
+
+/// Everything worth restoring when the user leaves the Library page and comes
+/// back: the opened document, preview content/mode, folder tree (including
+/// expansion state), current folder/view, and the last search. Module-level
+/// so it survives the page unmount; overwritten on every unmount.
+interface LibrarySessionSnapshot {
+  workspaceId: number;
+  tree: TreeNode[];
+  currentFolder: string;
+  viewMode: ViewMode;
+  documents: LibraryDocument[];
+  selectedDoc: LibraryDocument | null;
+  previewContent: string;
+  previewDocId: number | null;
+  libraryViewMode: "preview" | "edit";
+  query: string;
+  searchHits: SearchHit[] | null;
+  scanResult: ScanResult | null;
+}
+let librarySession: LibrarySessionSnapshot | null = null;
+
 export function LibraryPage() {
   const { t } = useI18n();
 
@@ -133,6 +183,44 @@ export function LibraryPage() {
   // Folder tree
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [currentFolder, setCurrentFolder] = useState("");
+
+  // Folder panel width is user-resizable: deep trees need more room than the
+  // 208px default. The choice persists locally across sessions.
+  const [folderPanelWidth, setFolderPanelWidth] = useState(readStoredFolderPanelWidth);
+  const folderPanelWidthRef = useRef(folderPanelWidth);
+  folderPanelWidthRef.current = folderPanelWidth;
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => resizeCleanupRef.current?.(), []);
+
+  const startFolderPanelResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = folderPanelWidthRef.current;
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.min(
+        FOLDER_PANEL_MAX,
+        Math.max(FOLDER_PANEL_MIN, startWidth + ev.clientX - startX)
+      );
+      setFolderPanelWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.documentElement.classList.remove("col-resizing");
+      resizeCleanupRef.current = null;
+      localStorage.setItem(FOLDER_PANEL_WIDTH_KEY, String(folderPanelWidthRef.current));
+    };
+    document.documentElement.classList.add("col-resizing");
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    resizeCleanupRef.current = onUp;
+  }, []);
+
+  const resetFolderPanelWidth = useCallback(() => {
+    setFolderPanelWidth(FOLDER_PANEL_DEFAULT);
+    localStorage.setItem(FOLDER_PANEL_WIDTH_KEY, String(FOLDER_PANEL_DEFAULT));
+  }, []);
 
   // Documents
   const [viewMode, setViewMode] = useState<ViewMode>("browse");
@@ -153,6 +241,35 @@ export function LibraryPage() {
   const openReqRef = useRef(0);
   const searchReqRef = useRef(0);
   const wsReqRef = useRef(0);
+  const docsReqRef = useRef(0);
+  // 当前工作区 id 的镜像：reindex / 加载子目录等异步操作完成后据此判断
+  // 工作区是否已切换，防止把旧工作区的数据渲染进新视图。
+  const wsIdRef = useRef<number | null>(null);
+
+  // 离开知识库页面时保存浏览上下文，下次进入同一工作区时整体恢复。
+  const sessionStateRef = useRef<LibrarySessionSnapshot | null>(null);
+  sessionStateRef.current = activeWs
+    ? {
+        workspaceId: activeWs.id,
+        tree,
+        currentFolder,
+        viewMode,
+        documents,
+        selectedDoc,
+        previewContent,
+        previewDocId,
+        libraryViewMode,
+        query,
+        searchHits,
+        scanResult,
+      }
+    : null;
+  useEffect(
+    () => () => {
+      if (sessionStateRef.current) librarySession = sessionStateRef.current;
+    },
+    []
+  );
 
   const loadFolders = useCallback(async (wsId: number) => {
     const roots = await listSubfolders(wsId);
@@ -160,7 +277,10 @@ export function LibraryPage() {
   }, []);
 
   const loadDocsFor = useCallback(async (wsId: number, folder: string) => {
+    // 令牌防竞态：快速连点两个文件夹时，先发后至的响应不得覆盖后者。
+    const req = ++docsReqRef.current;
     const docs = await listDocuments(wsId, folder || undefined);
+    if (req !== docsReqRef.current) return;
     setDocuments(docs);
   }, []);
 
@@ -181,6 +301,7 @@ export function LibraryPage() {
   // When the active workspace changes: incremental index + load tree + documents
   useEffect(() => {
     const req = ++wsReqRef.current;
+    wsIdRef.current = activeWs?.id ?? null;
     if (!activeWs) {
       setTree([]);
       setDocuments([]);
@@ -190,7 +311,27 @@ export function LibraryPage() {
       setPreviewDocId(null);
       return;
     }
-    setScanning(true);
+
+    // 回到上次浏览过的同一工作区：整体恢复会话快照（选中文档、预览、
+    // 文件夹树及展开状态、搜索），零请求，也不重复扫描。
+    if (librarySession && librarySession.workspaceId === activeWs.id) {
+      setTree(librarySession.tree);
+      setCurrentFolder(librarySession.currentFolder);
+      setViewMode(librarySession.viewMode);
+      setDocuments(librarySession.documents);
+      setSelectedDoc(librarySession.selectedDoc);
+      setPreviewContent(librarySession.previewContent);
+      setPreviewDocId(librarySession.previewDocId);
+      setLibraryViewMode(librarySession.libraryViewMode);
+      setQuery(librarySession.query);
+      setSearchHits(librarySession.searchHits);
+      setScanResult(librarySession.scanResult);
+      setScanning(false);
+      sessionScannedWorkspaces.add(activeWs.id);
+      librarySession = null;
+      return;
+    }
+
     setCurrentFolder("");
     setSelectedDoc(null);
     setPreviewContent("");
@@ -198,16 +339,31 @@ export function LibraryPage() {
     setDocuments([]);
     setTree([]);
     setSearchHits(null);
+    // 索引持久化在 SQLite 里，本会话已经扫过的工作区切页回来时直接读库，
+    // 不再自动重扫磁盘（万级文件的全量扫描让每次切页都像卡死）。
+    // 「重新索引」按钮始终强制真正重扫。
+    const alreadyScanned = sessionScannedWorkspaces.has(activeWs.id);
+    if (!alreadyScanned) setScanning(true);
     (async () => {
       try {
+        if (alreadyScanned) {
+          const docs = await listDocuments(activeWs.id, "");
+          if (req !== wsReqRef.current) return;
+          setScanResult({ indexed: 0, updated: 0, removed: 0, total: docs.length });
+          await loadFolders(activeWs.id);
+          if (req !== wsReqRef.current) return;
+          await loadDocsFor(activeWs.id, "");
+          return;
+        }
         const result = await scanWorkspace(activeWs.id);
         if (req !== wsReqRef.current) return;
+        sessionScannedWorkspaces.add(activeWs.id);
         setScanResult(result);
         await loadFolders(activeWs.id);
         if (req !== wsReqRef.current) return;
         await loadDocsFor(activeWs.id, "");
       } catch (e) {
-        if (req === wsReqRef.current) showToast(String(e));
+        if (req === wsReqRef.current) showToast(String(e), 3000, "error");
       } finally {
         if (req === wsReqRef.current) setScanning(false);
       }
@@ -223,7 +379,7 @@ export function LibraryPage() {
       await setActiveWorkspace(id);
       setActiveWs(ws);
     } catch (e) {
-      showToast(String(e));
+      showToast(String(e), 3000, "error");
     }
   }
 
@@ -242,7 +398,7 @@ export function LibraryPage() {
       setViewMode("browse");
       setActiveWs(ws);
     } catch (e) {
-      showToast(String(e));
+      showToast(String(e), 3000, "error");
     } finally {
       setBusy(false);
     }
@@ -257,7 +413,7 @@ export function LibraryPage() {
       setWorkspaces((prev) => prev.filter((w) => w.id !== activeWs.id));
       setActiveWs(null);
     } catch (e) {
-      showToast(String(e));
+      showToast(String(e), 3000, "error");
     } finally {
       setBusy(false);
     }
@@ -265,23 +421,30 @@ export function LibraryPage() {
 
   async function handleReindex() {
     if (!activeWs) return;
+    const wsId = activeWs.id;
     setScanning(true);
     try {
-      const result = await scanWorkspace(activeWs.id);
+      const result = await scanWorkspace(wsId);
+      // 期间切换了工作区：本次结果作废，交给新工作区自己的加载流程。
+      if (wsIdRef.current !== wsId) return;
+      sessionScannedWorkspaces.add(wsId);
       setScanResult(result);
-      await loadFolders(activeWs.id);
-      await loadDocsFor(activeWs.id, currentFolder);
+      await loadFolders(wsId);
+      if (wsIdRef.current !== wsId) return;
+      await loadDocsFor(wsId, currentFolder);
     } catch (e) {
-      showToast(String(e));
+      showToast(String(e), 3000, "error");
     } finally {
-      setScanning(false);
+      if (wsIdRef.current === wsId) setScanning(false);
     }
   }
 
   async function loadChildren(node: TreeNode) {
     if (!activeWs || node.loaded) return;
+    const wsId = activeWs.id;
     try {
-      const kids = await listSubfolders(activeWs.id, node.path || undefined);
+      const kids = await listSubfolders(wsId, node.path || undefined);
+      if (wsIdRef.current !== wsId) return;
       setTree((prev) =>
         mapTree(prev, node.path, (n) => ({
           ...n,
@@ -290,7 +453,7 @@ export function LibraryPage() {
         }))
       );
     } catch (e) {
-      showToast(String(e));
+      showToast(String(e), 3000, "error");
     }
   }
 
@@ -313,7 +476,7 @@ export function LibraryPage() {
     try {
       await loadDocsFor(activeWs.id, path);
     } catch (e) {
-      showToast(String(e));
+      showToast(String(e), 3000, "error");
     }
   }
 
@@ -328,16 +491,20 @@ export function LibraryPage() {
     if (!activeWs) return;
     setViewMode(mode);
     setSearchHits(null);
+    // 与 loadDocsFor 共用令牌：切换 tab 的三次并发请求只有最新一次能提交。
+    const req = ++docsReqRef.current;
     try {
       if (mode === "browse") {
         await loadDocsFor(activeWs.id, currentFolder);
       } else if (mode === "favorites") {
-        setDocuments(await listFavorites(activeWs.id));
+        const docs = await listFavorites(activeWs.id);
+        if (req === docsReqRef.current) setDocuments(docs);
       } else {
-        setDocuments(await listRecent(activeWs.id));
+        const docs = await listRecent(activeWs.id);
+        if (req === docsReqRef.current) setDocuments(docs);
       }
     } catch (e) {
-      showToast(String(e));
+      showToast(String(e), 3000, "error");
     }
   }
 
@@ -361,7 +528,13 @@ export function LibraryPage() {
         )
       );
     } catch (e) {
-      if (req === openReqRef.current) showToast(String(e), 3000, "error");
+      if (req === openReqRef.current) {
+        showToast(String(e), 3000, "error");
+        // 关键防护：读取失败时清空编辑器内容。若保留上一个文档的文本，
+        // 自动保存会把旧内容（连同用户的新输入）写进刚选中的这个文件。
+        setPreviewContent("");
+        setPreviewDocId(null);
+      }
     }
   }
 
@@ -439,20 +612,39 @@ export function LibraryPage() {
     return nodes.map((node) => (
       <div key={node.path}>
         <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={node.expanded}
           className={cn(
-            "flex items-center gap-1 rounded-md pr-2 py-1 text-sm cursor-pointer hover:bg-accent",
+            "flex items-center gap-1 rounded-md pr-2 py-1 text-sm cursor-pointer hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             currentFolder === node.path &&
               viewMode === "browse" &&
               "bg-accent text-accent-foreground"
           )}
-          style={{ paddingLeft: 8 + depth * 14 }}
+          style={{ paddingLeft: 8 + depth * 12 }}
           onClick={() => enterFolder(node.path)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              enterFolder(node.path);
+            }
+          }}
         >
           <span
+            role="button"
+            tabIndex={0}
+            aria-label={t("library.folders")}
             className="shrink-0 w-4 h-4 flex items-center justify-center text-muted-foreground hover:text-foreground"
             onClick={(e) => {
               e.stopPropagation();
               toggleNode(node);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleNode(node);
+              }
             }}
           >
             {node.children.length > 0 || !node.loaded ? (
@@ -472,7 +664,9 @@ export function LibraryPage() {
               node.expanded ? "text-primary" : "text-muted-foreground"
             )}
           />
-          <span className="truncate flex-1">{node.name}</span>
+          <span className="truncate flex-1" title={node.name}>
+            {node.name}
+          </span>
           <span className="text-xs text-muted-foreground shrink-0">
             {node.docCount}
           </span>
@@ -556,7 +750,7 @@ export function LibraryPage() {
           {hit.snippet ? (
             <div
               className="text-xs text-muted-foreground line-clamp-3 [&_mark]:bg-yellow-300/60 [&_mark]:text-foreground [&_mark]:rounded-sm [&_mark]:px-0.5 break-words"
-              dangerouslySetInnerHTML={{ __html: hit.snippet }}
+              dangerouslySetInnerHTML={{ __html: safeSnippetHtml(hit.snippet) }}
             />
           ) : (
             <div
@@ -575,21 +769,22 @@ export function LibraryPage() {
     <div className="h-full flex flex-col">
       {/* Toolbar */}
       <div className="h-12 shrink-0 border-b border-border flex items-center gap-2 px-4">
-        <select
-          value={activeWs?.id ?? ""}
-          onChange={(e) => handleSelectWorkspace(Number(e.target.value))}
-          className="h-8 max-w-48 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
+        <Select
+          value={activeWs ? String(activeWs.id) : undefined}
+          onValueChange={(v) => handleSelectWorkspace(Number(v))}
           disabled={workspaces.length === 0}
         >
-          <option value="" disabled>
-            {t("library.selectWorkspace")}
-          </option>
-          {workspaces.map((ws) => (
-            <option key={ws.id} value={ws.id}>
-              {ws.name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="w-44 shrink-0">
+            <SelectValue placeholder={t("library.selectWorkspace")} />
+          </SelectTrigger>
+          <SelectContent>
+            {workspaces.map((ws) => (
+              <SelectItem key={ws.id} value={String(ws.id)}>
+                {ws.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
         <Button
           variant="outline"
@@ -656,8 +851,11 @@ export function LibraryPage() {
 
       {/* Three columns */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: folder tree */}
-        <aside className="w-52 shrink-0 border-r border-border flex flex-col">
+        {/* Left: folder tree (drag the right edge to resize) */}
+        <aside
+          className="relative shrink-0 border-r border-border flex flex-col"
+          style={{ width: folderPanelWidth }}
+        >
           <div className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wide shrink-0">
             {t("library.folders")}
           </div>
@@ -668,7 +866,7 @@ export function LibraryPage() {
               <p className="text-xs opacity-80">{t("library.noWorkspaceHint")}</p>
             </div>
           ) : (
-            <ScrollArea className="flex-1">
+            <div className="flex-1 overflow-y-auto">
               <div className="px-2 pb-2">
                 <button
                   onClick={() => enterFolder("")}
@@ -687,16 +885,27 @@ export function LibraryPage() {
                 </button>
                 {renderTree(tree)}
               </div>
-            </ScrollArea>
+            </div>
           )}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t("library.resizeFoldersHint")}
+            title={t("library.resizeFoldersHint")}
+            onMouseDown={startFolderPanelResize}
+            onDoubleClick={resetFolderPanelWidth}
+            className="absolute inset-y-0 right-0 z-10 w-1 cursor-col-resize transition-colors hover:bg-primary/50 active:bg-primary/70"
+          />
         </aside>
 
         {/* Middle: documents / search results */}
         <div className="w-80 shrink-0 border-r border-border flex flex-col">
-          <div className="flex items-center gap-1 px-2 pt-2 pb-1.5 shrink-0 border-b">
+          <div className="flex items-center gap-1 px-2 pt-2 pb-1.5 shrink-0 border-b" role="tablist">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
+                role="tab"
+                aria-selected={viewMode === tab.id}
                 onClick={() => switchViewMode(tab.id)}
                 className={cn(
                   "flex-1 rounded-md px-2 py-1.5 text-xs font-medium",
@@ -767,13 +976,31 @@ export function LibraryPage() {
                       )}
                     />
                   </button>
-                  <button
-                    onClick={() => setLibraryViewMode((m) => (m === "preview" ? "edit" : "preview"))}
-                    className="h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    title={libraryViewMode === "preview" ? t("editor.editMode") : t("editor.previewMode")}
-                  >
-                    {libraryViewMode === "preview" ? <Edit size={14} /> : <Eye size={14} />}
-                  </button>
+                  {/* 预览/编辑 药丸切换 */}
+                  <div className="inline-flex items-center rounded-lg bg-muted p-0.5 shrink-0">
+                    {(
+                      [
+                        { mode: "preview", icon: Eye, label: t("editor.previewMode") },
+                        { mode: "edit", icon: Edit, label: t("editor.editMode") },
+                      ] as const
+                    ).map(({ mode, icon: Icon, label }) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setLibraryViewMode(mode)}
+                        aria-pressed={libraryViewMode === mode}
+                        className={cn(
+                          "flex items-center gap-1 h-6 px-2 rounded-md text-xs font-medium transition-colors",
+                          libraryViewMode === mode
+                            ? "bg-background text-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        <Icon size={12} />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   {libraryViewMode === "edit" && librarySaving && (
                     <span className="text-xs text-muted-foreground ml-auto">{t("editor.saving")}</span>
                   )}

@@ -4,52 +4,55 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Light: soft neutral canvas with white cards floating on it. */
+    --background: 220 23% 96.5%;
+    --foreground: 224 42% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 224 42% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 258 90% 62%;
+    --popover-foreground: 224 42% 11%;
+    --primary: 258 84% 58%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 258 94% 93%;
-    --accent-foreground: 263 70% 40%;
-    --destructive: 0 84.2% 60.2%;
+    --secondary: 220 16% 95%;
+    --secondary-foreground: 224 35% 15%;
+    --muted: 220 16% 95%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 258 80% 96%;
+    --accent-foreground: 258 60% 44%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 258 90% 62%;
-    --success: 142 71% 45%;
-    --warning: 38 92% 50%;
-    --radius: 0.5rem;
+    --border: 220 14% 90%;
+    --input: 220 14% 87%;
+    --ring: 258 84% 58%;
+    --success: 142 64% 40%;
+    --warning: 32 90% 44%;
+    --radius: 0.625rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 258 90% 62%;
+    /* Dark: layered navy surfaces — bg < card < elevated — so panels read
+       as depth rather than flat black. */
+    --background: 224 38% 6.5%;
+    --foreground: 218 30% 94%;
+    --card: 224 32% 9%;
+    --card-foreground: 218 30% 94%;
+    --popover: 225 30% 10.5%;
+    --popover-foreground: 218 30% 94%;
+    --primary: 258 90% 68%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 263 70% 30%;
-    --accent-foreground: 240 50% 90%;
-    --destructive: 0 62.8% 30.6%;
+    --secondary: 222 26% 14%;
+    --secondary-foreground: 218 25% 90%;
+    --muted: 222 26% 13.5%;
+    --muted-foreground: 219 16% 64%;
+    --accent: 257 45% 24%;
+    --accent-foreground: 255 60% 92%;
+    --destructive: 0 62% 42%;
     --destructive-foreground: 0 0% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 258 90% 62%;
-    --success: 142 69% 58%;
-    --warning: 38 92% 50%;
+    --border: 220 22% 16%;
+    --input: 220 22% 18%;
+    --ring: 258 90% 68%;
+    --success: 142 60% 52%;
+    --warning: 36 92% 56%;
   }
 
   * {
@@ -61,8 +64,33 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 
+  ::selection {
+    background-color: hsl(var(--primary) / 0.25);
+  }
+
   html {
     scroll-behavior: smooth;
+  }
+
+  /* ---- Ambient page glow: a faint brand tint bleeding in from the top
+     gives the shell depth without adding chrome. ---- */
+  .page-glow {
+    background-image:
+      radial-gradient(1100px 380px at 18% -12%, hsl(var(--primary) / 0.06), transparent 62%),
+      radial-gradient(900px 340px at 88% -18%, hsl(215 90% 60% / 0.05), transparent 62%);
+  }
+  .dark .page-glow {
+    background-image:
+      radial-gradient(1100px 380px at 18% -12%, hsl(var(--primary) / 0.1), transparent 62%),
+      radial-gradient(900px 340px at 88% -18%, hsl(215 90% 60% / 0.07), transparent 62%);
+  }
+
+  /* Column-resize drag (library folder panel): pin the cursor and suppress
+     text selection everywhere while the drag is active. */
+  .col-resizing,
+  .col-resizing * {
+    cursor: col-resize !important;
+    user-select: none !important;
   }
 
   /* ---- Global scrollbar styling ---- */
@@ -255,37 +283,19 @@
   transform: translateY(-1px);
 }
 
-/* CodeMirror theme overrides */
+/* CodeMirror chrome is owned by the JS theme in MarkdownEditor.tsx
+   (typography, gutters, cursor, active line). Only shared sizing and the
+   selection/bracket colors live here. */
 .cm-editor {
   height: 100%;
-  font-size: 0.875rem;
+  font-size: 15px;
 }
 .cm-editor.cm-focused {
   outline: none;
 }
-.cm-editor .cm-scroller {
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-}
-.cm-editor .cm-content {
-  padding: 12px 16px;
-}
-.cm-editor .cm-gutters {
-  background: transparent;
-  border-right: 1px solid hsl(var(--border));
-  color: hsl(var(--muted-foreground));
-}
-.cm-editor .cm-activeLineGutter {
-  background: hsl(var(--accent) / 0.3);
-}
-.cm-editor .cm-activeLine {
-  background: hsl(var(--accent) / 0.15);
-}
-.cm-editor .cm-cursor {
-  border-left-color: hsl(var(--foreground));
-}
 .cm-editor .cm-selectionBackground,
 .cm-focused .cm-selectionBackground {
-  background: hsl(var(--primary) / 0.2) !important;
+  background: hsl(var(--primary) / 0.18) !important;
 }
 .cm-editor .cm-matchingBracket {
   background: hsl(var(--primary) / 0.2);

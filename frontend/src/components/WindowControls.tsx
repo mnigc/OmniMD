@@ -17,33 +17,47 @@ export function WindowControls() {
   useEffect(() => {
     const win = getCurrentWindow();
     let unlisten: (() => void) | undefined;
+    // 组件可能在 await 完成前卸载：置脏标记防止注销前注册的监听泄漏。
+    let cleanedUp = false;
 
     (async () => {
       try {
         setIsMaximized(await win.isMaximized());
-        unlisten = await win.onResized(() => {
+        const fn = await win.onResized(() => {
           win.isMaximized().then(setIsMaximized);
         });
+        if (cleanedUp) fn();
+        else unlisten = fn;
       } catch (err) {
         console.error("Failed to init window controls", err);
       }
     })();
 
     return () => {
+      cleanedUp = true;
       unlisten?.();
     };
   }, []);
 
   if (!isWindows()) return null;
 
-  const win = getCurrentWindow();
+  // Resolve the window handle lazily inside handlers: calling getCurrentWindow()
+  // during render throws when the Tauri runtime is absent (e.g. dev preview in a
+  // plain browser) and would crash the whole tree through the error boundary.
+  const withWindow = (fn: (win: ReturnType<typeof getCurrentWindow>) => void) => {
+    try {
+      fn(getCurrentWindow());
+    } catch {
+      // Not running in Tauri
+    }
+  };
 
   return (
     <div className="flex h-full items-stretch">
       <button
         type="button"
         aria-label="Minimize"
-        onClick={() => win.minimize().catch(() => {})}
+        onClick={() => withWindow((win) => win.minimize().catch(() => {}))}
         className={cn(baseButtonClass, "hover:bg-muted/80 hover:text-foreground")}
       >
         <Minus size={14} />
@@ -51,7 +65,7 @@ export function WindowControls() {
       <button
         type="button"
         aria-label={isMaximized ? "Restore" : "Maximize"}
-        onClick={() => win.toggleMaximize().catch(() => {})}
+        onClick={() => withWindow((win) => win.toggleMaximize().catch(() => {}))}
         className={cn(baseButtonClass, "hover:bg-muted/80 hover:text-foreground")}
       >
         {isMaximized ? <Copy size={14} /> : <Square size={14} />}
@@ -59,8 +73,8 @@ export function WindowControls() {
       <button
         type="button"
         aria-label="Close"
-        onClick={() => win.close().catch(() => {})}
-        className={cn(baseButtonClass, "hover:bg-red-600 hover:text-white")}
+        onClick={() => withWindow((win) => win.close().catch(() => {}))}
+        className={cn(baseButtonClass, "hover:bg-destructive hover:text-white")}
       >
         <X size={14} />
       </button>
