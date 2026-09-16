@@ -14,10 +14,22 @@ on:
 permissions:
   contents: write
 
+# Serialize release runs. tauri-action merges each platform's entry into the
+# release's existing latest.json (read → merge → re-upload), so two concurrent
+# runs on the same release can drop a platform entry or fail outright.
+# Queued rather than cancelled: never kill a run that may already have
+# published a release.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.platform }}
+    # Default is 360 min, so a hung download inside the bundler would burn six
+    # hours of runner time before failing. Cold builds are ~10-45 min.
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
@@ -25,12 +37,15 @@ jobs:
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             bundles: 'app,dmg'
+            timeout: 75
           - platform: ubuntu-22.04
             args: ''
             bundles: 'deb,appimage,rpm'
+            timeout: 50
           - platform: windows-latest
             args: ''
             bundles: 'nsis'
+            timeout: 50
 
     steps:
       - name: Checkout
