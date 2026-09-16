@@ -1,7 +1,6 @@
 ﻿import { invoke } from "@tauri-apps/api/core";
 import type {
   ConversionResult,
-  ConverterInfo,
   WorkspaceInfo,
   LibraryDocument,
   LibraryFolder,
@@ -30,11 +29,6 @@ export async function cancelTask(taskId: string): Promise<void> {
 
 export async function getSupportedFormats(): Promise<string[]> {
   return invoke<string[]>("get_supported_formats");
-}
-
-export async function getConverterInfo(): Promise<ConverterInfo> {
-  const raw = await invoke<string>("get_converter_info");
-  return JSON.parse(raw);
 }
 
 export async function getAppVersion(): Promise<string> {

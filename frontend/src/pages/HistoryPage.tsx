@@ -15,6 +15,7 @@ import { Button } from "../components/ui/button";
 import { useTaskStore } from "../store/useTaskStore";
 import { useI18n } from "../i18n";
 import { readTextFile, openFolder } from "../api/tauriApi";
+import { confirmDialog } from "../api/dialogs";
 import { dirname, resolve } from "@tauri-apps/api/path";
 import type {
   ConversionResult,
@@ -35,6 +36,7 @@ const statusBadgeVariant: Record<
 > = {
   Pending: "warning",
   Processing: "secondary",
+  Paused: "warning",
   Completed: "success",
   Failed: "destructive",
   Canceled: "secondary",
@@ -44,6 +46,7 @@ const statusBadgeVariant: Record<
 const statusKey: Record<string, string> = {
   Pending: "taskStatus.pending",
   Processing: "taskStatus.processing",
+  Paused: "taskStatus.paused",
   Completed: "taskStatus.completed",
   Failed: "taskStatus.failed",
   Cancelled: "taskStatus.cancelled",
@@ -53,7 +56,13 @@ function formatTime(ts: number | null): string {
   if (!ts) return "\u2014";
   const d = new Date(ts);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  // Include the year only when the entry is not from the current year, so
+  // recent entries stay compact without becoming ambiguous.
+  if (d.getFullYear() !== new Date().getFullYear()) {
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
 }
 
 interface HistoryPageProps {
@@ -62,13 +71,11 @@ interface HistoryPageProps {
 
 function HistoryCard({
   entry,
-  index,
   onOpenFile,
   onOpenFolder,
   onDelete,
 }: {
   entry: HistoryEntry;
-  index: number;
   onOpenFile: () => void;
   onOpenFolder: () => void;
   onDelete: () => void;
@@ -84,7 +91,7 @@ function HistoryCard({
         "group flex items-center gap-4 p-3.5 rounded-xl border transition-all duration-200",
         "border-border/70 bg-background",
         "hover:border-primary/30 hover:shadow-sm hover:shadow-primary/5",
-        entry.status === "Failed" && "border-destructive/20 bg-destructive/3"
+        entry.status === "Failed" && "border-destructive/20 bg-destructive/5"
       )}
     >
       <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-muted/60 shrink-0">
@@ -227,12 +234,14 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
     }
   };
 
-  const handleDelete = (entry: HistoryEntry) => {
-    clearHistoryItem(entry.id);
+  const handleDelete = async (entry: HistoryEntry) => {
+    if (await confirmDialog(t("history.deleteConfirm"), t("history.delete"))) {
+      clearHistoryItem(entry.id);
+    }
   };
 
-  const handleClearAll = () => {
-    if (window.confirm(t("history.clearConfirm"))) {
+  const handleClearAll = async () => {
+    if (await confirmDialog(t("history.clearConfirm"), t("history.clearAll"))) {
       clearAllHistory();
     }
   };
@@ -279,11 +288,10 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
             </div>
           ) : (
             <div className="flex flex-col gap-2">
-              {history.map((entry, index) => (
+              {history.map((entry) => (
                 <HistoryCard
                   key={entry.id}
                   entry={entry}
-                  index={index}
                   onOpenFile={() => handleOpenFile(entry)}
                   onOpenFolder={() => handleOpenFolder(entry)}
                   onDelete={() => handleDelete(entry)}

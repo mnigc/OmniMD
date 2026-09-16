@@ -10,7 +10,7 @@
 
 A cross-platform desktop application that converts documents such as PDF, Word, Excel, PowerPoint, EPUB, and HTML into clean Markdown.
 
-Built with **Tauri 2** + **Rust** + **React**. Core conversion powered by [MinerU](https://github.com/opendatalab/MinerU) 3.x.
+Built with **Tauri 2** + **Rust** + **React**. Core conversion powered by [AnyDoc](https://github.com/firecrawl/anydoc) — a local, pure-Rust engine with no ML models and no network access.
 
 </div>
 
@@ -18,11 +18,12 @@ Built with **Tauri 2** + **Rust** + **React**. Core conversion powered by [Miner
 
 ## ✨ Features
 
-- **20+ format support** — PDF, DOC/DOCX, PPT/PPTX, XLS/XLSX, EPUB, CSV, TXT, HTML, ODT/ODS/ODP, RTF and more
+- **20+ format support** — PDF, DOC/DOCX, PPT/PPTX, XLS/XLSX, EPUB, CSV, ODT/ODS/ODP, RTF and more
+- **Millisecond conversion** — Pure-Rust, in-process engine; no Python, no models to download
 - **Batch conversion** — Drag in multiple files at once, convert concurrently with real-time progress
-- **Asset extraction** — Automatically extracts images and other resources into an `assets/` directory
+- **Asset extraction** — Automatically extracts embedded images into a per-document `assets/` directory
 - **Smart format detection** — Detects format via magic bytes, independent of file extension
-- **Text passthrough** — Plain text, JSON, XML, and HTML pass through directly as Markdown blocks
+- **Markdown workbench** — Library with folder tree, full-text search (Chinese + English), favorites, recent, preview and edit
 - **Local-first** — All conversion happens locally; no files are uploaded, ensuring privacy
 - **Native desktop experience** — Tauri packages a small, fast native app
 
@@ -30,13 +31,15 @@ Built with **Tauri 2** + **Rust** + **React**. Core conversion powered by [Miner
 
 > TODO: Add screenshots
 
-The app has three main pages:
+Main pages:
 
 | Page | Purpose |
 |------|---------|
-| **Home** | File browsing and quick access |
-| **Convert** | Single-file conversion with output preview |
-| **Batch** | Batch conversion with concurrency control and progress tracking |
+| **Home** | Drop files / folders, configure concurrency and output location, track the conversion queue |
+| **Library** | Workspace folders, documents, full-text search, favorites, recent, preview & edit |
+| **History** | Every completed / failed / cancelled conversion |
+| **Preview** | Single-document source / preview / split view |
+| **Settings** | Theme, language, default output directory |
 
 ## 🚀 Getting Started
 
@@ -86,20 +89,20 @@ OmniMD/
 ├── src/                      # Rust backend
 │   ├── main.rs             # Entry point
 │   ├── lib.rs              # Tauri command registration (frontend API)
-│   ├── pipeline.rs         # Conversion pipeline (read → convert → write)
+│   ├── markdown_pipeline.rs# Post-processing (heading/list normalization, cleanup, stats)
 │   ├── file_utils.rs       # Path helpers / format whitelist
-│   ├── engine/             # Document conversion engine (AnyDoc integration)
+│   ├── db/                 # SQLite workspace layer (metadata + FTS5 search)
+│   ├── engine/             # DocumentEngine trait + AnyDoc implementation + batch queue
 │   └── models/             # Document / Task / Asset data structures
 ├── frontend/               # React + TypeScript frontend
 │   ├── src/
 │   │   ├── App.tsx         # App shell and navigation
-│   │   ├── pages/          # Home / Convert / Batch pages
+│   │   ├── pages/          # Home / Library / History / Preview / Settings
 │   │   ├── api/            # invoke wrappers for Rust backend
 │   │   ├── store/          # zustand state management
 │   │   ├── components/     # Reusable components
 │   │   └── types/          # Shared type definitions
-│   └── vite.config.ts      # Vite config (port 1420)
-├── tests/                  # Integration tests + fixtures
+│   └── vite.config.ts      # Vite config (port 1421)
 ```
 
 ## 🔌 Frontend–Backend Communication
@@ -109,10 +112,12 @@ The frontend calls registered Rust commands via Tauri's `invoke`. See [`src/lib.
 | Command | Parameters | Returns | Description |
 |---------|-----------|---------|-------------|
 | `convert_file` | `sourcePath`, `outputDir` | `ConversionResult` | Convert a single file |
+| `cancel_task` | `taskId` | — | Cooperatively cancel a conversion |
 | `get_supported_formats` | — | `string[]` | Supported extensions |
-| `get_converter_info` | — | `ConverterInfo` | Converter name and formats |
+| `batch_enqueue` / `batch_start` / `batch_cancel_all` … | see `src/lib.rs` | — | Batch queue control |
+| `list_workspaces` / `scan_workspace` / `list_documents` / `search_documents` … | see `src/lib.rs` | — | Library data layer (SQLite + FTS5) |
 
-During conversion, progress is pushed via Tauri events `task-progress` / `task-status`, which the frontend listens to for live UI updates.
+During conversion, progress is pushed via Tauri events `task-progress` / `task-status` (and `batch-progress` / `batch-status` / `batch-summary`), which the frontend listens to for live UI updates.
 
 ## 🧪 Testing
 
@@ -146,10 +151,12 @@ TODO: Add a LICENSE file (MIT or Apache-2.0 recommended).
 
 ## 🗺️ Roadmap
 
-- [x] Phase 1 MVP — single-file / batch conversion
-- [ ] Settings page (output format, concurrency, OCR toggle)
-- [ ] OCR image text recognition (model structure reserved in `src/models/ocr.rs`)
-- [ ] Drag-and-drop folder recursive conversion
+- [x] Single-file / batch conversion with a local pure-Rust engine
+- [x] Library (workspace folders, full-text search, favorites, recent)
+- [x] Preview / edit with autosave
+- [x] Conversion history
+- [x] Theme (light / dark / system) and language (zh / en) switching
+- [ ] Windows shell context-menu integration
 - [ ] Cross-platform builds (macOS / Linux)
 
 ## 📖 More Documentation

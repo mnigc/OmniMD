@@ -5,11 +5,13 @@ const STORAGE_KEY = "omnimd_settings";
 interface StoredSettings {
   defaultOutputDir: string;
   concurrency: number;
+  sidebarDefaultOpen: boolean;
 }
 
 const DEFAULTS: StoredSettings = {
   defaultOutputDir: "",
   concurrency: 3,
+  sidebarDefaultOpen: true,
 };
 
 function loadSettings(): StoredSettings {
@@ -21,6 +23,10 @@ function loadSettings(): StoredSettings {
         ...DEFAULTS,
         defaultOutputDir: parsed.defaultOutputDir ?? DEFAULTS.defaultOutputDir,
         concurrency: parsed.concurrency ?? DEFAULTS.concurrency,
+        sidebarDefaultOpen:
+          typeof parsed.sidebarDefaultOpen === "boolean"
+            ? parsed.sidebarDefaultOpen
+            : DEFAULTS.sidebarDefaultOpen,
       };
     }
   } catch {
@@ -30,12 +36,17 @@ function loadSettings(): StoredSettings {
 }
 
 function saveSettings(s: StoredSettings) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+  } catch {
+    // Quota exceeded / storage disabled: never let persistence break state.
+  }
 }
 
 interface SettingsStore extends StoredSettings {
   setDefaultOutputDir: (v: string) => void;
   setConcurrency: (v: number) => void;
+  setSidebarDefaultOpen: (v: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsStore>((set) => {
@@ -53,5 +64,6 @@ export const useSettingsStore = create<SettingsStore>((set) => {
 
     setDefaultOutputDir: (v) => patch({ defaultOutputDir: v }),
     setConcurrency: (v) => patch({ concurrency: v }),
+    setSidebarDefaultOpen: (v) => patch({ sidebarDefaultOpen: v }),
   };
 });

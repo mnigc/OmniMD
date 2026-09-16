@@ -1,7 +1,8 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeSlug from "rehype-slug";
 import { useI18n } from "../i18n";
 
@@ -14,6 +15,28 @@ interface MarkdownPreviewProps {
  *  most expensive plugin — skip it entirely for documents without markup. */
 const HAS_HTML_RE = /<[a-zA-Z][^>]*>/;
 
+/**
+ * Sanitize schema: the GitHub default (which already strips scripts, event
+ * handlers and dangerous URL schemes) extended to keep the bits this preview
+ * relies on — code language classes, heading ids from rehype-slug, and inline
+ * / asset images. Without rehype-sanitize, raw HTML in a document would be
+ * rendered verbatim (an XSS vector, since the webview can reach Tauri APIs).
+ */
+const sanitizeSchema: typeof defaultSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    "*": [...(defaultSchema.attributes?.["*"] ?? []), "className", "id"],
+    code: [...(defaultSchema.attributes?.code ?? []), "className"],
+    img: ["src", "alt", "title", "width", "height", "className"],
+    a: [...(defaultSchema.attributes?.a ?? []), "href", "target", "rel"],
+  },
+  protocols: {
+    ...defaultSchema.protocols,
+    src: ["http", "https", "data", "asset"],
+  },
+};
+
 function MarkdownPreviewImpl({ content }: MarkdownPreviewProps) {
   const { t } = useI18n();
 
@@ -21,9 +44,10 @@ function MarkdownPreviewImpl({ content }: MarkdownPreviewProps) {
   // toggles, openedAt updates, folder switches) no longer re-run the whole
   // remark/rehype pipeline.
   const rendered = useMemo(() => {
-    const rehypePlugins = HAS_HTML_RE.test(content)
-      ? [rehypeRaw, rehypeSlug]
-      : [rehypeSlug];
+    const rehypePlugins: ComponentProps<typeof ReactMarkdown>["rehypePlugins"] =
+      HAS_HTML_RE.test(content)
+        ? [rehypeRaw, rehypeSlug, [rehypeSanitize, sanitizeSchema]]
+        : [rehypeSlug];
     return (
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}

@@ -6,6 +6,8 @@
     "dev": "cd frontend && pnpm dev",
     "build": "cd frontend && pnpm build",
     "bundle:tools": "powershell -ExecutionPolicy Bypass -File scripts/bundle-tools.ps1",
+    "build:app": "powershell -ExecutionPolicy Bypass -File scripts/build-signed.ps1",
+    "icons": "tauri icon ./app-icon.png",
     "tauri": "tauri"
   },
   "devDependencies": {

@@ -33,7 +33,6 @@ const dropHandledNatively = useRef(false);
   // same file multiple times.
   const onFilesRef = useRef(onFiles);
   onFilesRef.current = onFiles;
-  const disabled = false;
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
@@ -45,6 +44,9 @@ const dropHandledNatively = useRef(false);
         unlisten = await appWindow.onDragDropEvent((event) => {
           const type = event.payload.type;
           if (type === "enter") {
+            // A stale "handled natively" flag from a previous drop would
+            // swallow the next genuine DOM drop; clear it on every drag enter.
+            dropHandledNatively.current = false;
             const paths = (event.payload as { paths?: string[] }).paths ?? [];
             const single = paths.length === 1 ? paths[0] : undefined;
             setIsFolderDrag(
@@ -119,6 +121,7 @@ const dropHandledNatively = useRef(false);
     (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      dropHandledNatively.current = false;
       setIsDragging(true);
     },
     []
@@ -187,10 +190,8 @@ const dropHandledNatively = useRef(false);
         "transition-all duration-300 ease-out",
         className,
         isDragging
-          ? "border-primary bg-primary/8 shadow-xl shadow-primary/15 scale-[1.01]"
-          : disabled
-            ? "border-border bg-muted/20 opacity-50 cursor-not-allowed"
-            : "border-border/70 bg-muted/20 hover:border-primary/50 hover:bg-muted/40 hover:shadow-md hover:shadow-primary/5"
+          ? "border-primary bg-primary/10 shadow-xl shadow-primary/15 scale-[1.01]"
+          : "border-border/70 bg-muted/20 hover:border-primary/50 hover:bg-muted/40 hover:shadow-md hover:shadow-primary/5"
       )}
     >
       <div
@@ -220,11 +221,6 @@ const dropHandledNatively = useRef(false);
               : t("dropzone.releaseToConvert")
             : t("dropzone.dropFilesOrFolder")}
         </p>
-        {disabled && (
-          <p className="text-xs mt-0.5 text-destructive truncate">
-            {t("dropzone.disabledHint")}
-          </p>
-        )}
       </div>
 
       <div className="flex items-center gap-2 shrink-0">

@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import {
   BookOpenText,
   ChevronDown,
@@ -35,7 +35,7 @@ import {
   setActiveWorkspace,
   setDocumentFavorite,
 } from "../api/tauriApi";
-import { pickDir } from "../api/dialogs";
+import { pickDir, confirmDialog } from "../api/dialogs";
 import { MarkdownPreview } from "../components/MarkdownPreview";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { useAutoSave } from "../hooks/useAutoSave";
@@ -44,6 +44,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
+import { VirtualList } from "../components/VirtualList";
 import { cn } from "../lib/utils";
 import { showToast } from "../lib/toast";
 import type {
@@ -63,7 +64,8 @@ interface TreeNode extends LibraryFolder {
 }
 
 function toNode(folder: LibraryFolder): TreeNode {
-  return { ...folder, expanded: false, loaded: true, children: [] };
+  // `loaded: false` so nested subfolders are fetched lazily when first expanded.
+  return { ...folder, expanded: false, loaded: false, children: [] };
 }
 
 function mapTree(
@@ -75,6 +77,15 @@ function mapTree(
     if (node.path === target) return fn(node);
     return { ...node, children: mapTree(node.children, target, fn) };
   });
+}
+
+function findNode(nodes: TreeNode[], target: string): TreeNode | null {
+  for (const node of nodes) {
+    if (node.path === target) return node;
+    const found = findNode(node.children, target);
+    if (found) return found;
+  }
+  return null;
 }
 
 function joinPath(root: string, rel: string): string {
@@ -130,12 +141,18 @@ export function LibraryPage() {
 
   // Preview / Edit
   const [previewContent, setPreviewContent] = useState("");
+  const [previewDocId, setPreviewDocId] = useState<number | null>(null);
   const [libraryViewMode, setLibraryViewMode] = useState<"preview" | "edit">("preview");
 
   // Search
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
+
+  // Request tokens: only the newest async request may commit its result.
+  const openReqRef = useRef(0);
+  const searchReqRef = useRef(0);
+  const wsReqRef = useRef(0);
 
   const loadFolders = useCallback(async (wsId: number) => {
     const roots = await listSubfolders(wsId);
@@ -163,31 +180,36 @@ export function LibraryPage() {
 
   // When the active workspace changes: incremental index + load tree + documents
   useEffect(() => {
+    const req = ++wsReqRef.current;
     if (!activeWs) {
       setTree([]);
       setDocuments([]);
       setCurrentFolder("");
       setSelectedDoc(null);
       setPreviewContent("");
+      setPreviewDocId(null);
       return;
     }
     setScanning(true);
     setCurrentFolder("");
     setSelectedDoc(null);
     setPreviewContent("");
+    setPreviewDocId(null);
     setDocuments([]);
     setTree([]);
     setSearchHits(null);
     (async () => {
       try {
         const result = await scanWorkspace(activeWs.id);
+        if (req !== wsReqRef.current) return;
         setScanResult(result);
         await loadFolders(activeWs.id);
+        if (req !== wsReqRef.current) return;
         await loadDocsFor(activeWs.id, "");
       } catch (e) {
-        showToast(String(e));
+        if (req === wsReqRef.current) showToast(String(e));
       } finally {
-        setScanning(false);
+        if (req === wsReqRef.current) setScanning(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -227,14 +249,17 @@ export function LibraryPage() {
   }
 
   async function handleDeleteWorkspace() {
-    if (!activeWs) return;
-    if (!window.confirm(t("library.deleteWorkspaceConfirm"))) return;
+    if (!activeWs || busy) return;
+    if (!(await confirmDialog(t("library.deleteWorkspaceConfirm"), t("library.deleteWorkspace")))) return;
+    setBusy(true);
     try {
       await removeWorkspace(activeWs.id);
       setWorkspaces((prev) => prev.filter((w) => w.id !== activeWs.id));
       setActiveWs(null);
     } catch (e) {
       showToast(String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -253,19 +278,38 @@ export function LibraryPage() {
     }
   }
 
+  async function loadChildren(node: TreeNode) {
+    if (!activeWs || node.loaded) return;
+    try {
+      const kids = await listSubfolders(activeWs.id, node.path || undefined);
+      setTree((prev) =>
+        mapTree(prev, node.path, (n) => ({
+          ...n,
+          loaded: true,
+          children: kids.map(toNode),
+        }))
+      );
+    } catch (e) {
+      showToast(String(e));
+    }
+  }
+
   async function enterFolder(path: string) {
     if (!activeWs) return;
     setCurrentFolder(path);
     setSelectedDoc(null);
     setPreviewContent("");
+    setPreviewDocId(null);
     setDocuments([]);
     setViewMode("browse");
     setSearchHits(null);
-    setTree((prev) =>
-      path
-        ? mapTree(prev, path, (node) => ({ ...node, expanded: true }))
-        : prev
-    );
+    if (path) {
+      const node = findNode(tree, path);
+      if (node) await loadChildren(node);
+      setTree((prev) =>
+        mapTree(prev, path, (n) => ({ ...n, expanded: true }))
+      );
+    }
     try {
       await loadDocsFor(activeWs.id, path);
     } catch (e) {
@@ -274,22 +318,7 @@ export function LibraryPage() {
   }
 
   async function toggleNode(node: TreeNode) {
-    if (!activeWs) return;
-    if (!node.expanded && !node.loaded) {
-      try {
-        const kids = await listSubfolders(activeWs.id, node.path || undefined);
-        setTree((prev) =>
-          mapTree(prev, node.path, (n) => ({
-            ...n,
-            loaded: true,
-            children: kids.map(toNode),
-          }))
-        );
-      } catch (e) {
-        showToast(String(e));
-        return;
-      }
-    }
+    if (!node.expanded) await loadChildren(node);
     setTree((prev) =>
       mapTree(prev, node.path, (n) => ({ ...n, expanded: !n.expanded }))
     );
@@ -314,10 +343,15 @@ export function LibraryPage() {
 
   async function openDocument(doc: LibraryDocument) {
     if (!activeWs) return;
+    const req = ++openReqRef.current;
     setSelectedDoc(doc);
+    setPreviewDocId(null);
     try {
       const content = await readTextFile(joinPath(activeWs.path, doc.path));
+      // Ignore a stale response (the user opened another document meanwhile).
+      if (req !== openReqRef.current) return;
       setPreviewContent(content);
+      setPreviewDocId(doc.id);
       recordDocumentOpen(doc.id).catch(() => {});
       setDocuments((docs) =>
         docs.map((d) =>
@@ -327,7 +361,7 @@ export function LibraryPage() {
         )
       );
     } catch (e) {
-      showToast(String(e));
+      if (req === openReqRef.current) showToast(String(e), 3000, "error");
     }
   }
 
@@ -345,8 +379,17 @@ export function LibraryPage() {
       setSelectedDoc((sel) =>
         sel && sel.id === doc.id ? { ...sel, favorite: next } : sel
       );
+      setSearchHits((hits) =>
+        hits
+          ? hits.map((h) =>
+              h.document.id === doc.id
+                ? { ...h, document: { ...h.document, favorite: next } }
+                : h
+            )
+          : hits
+      );
     } catch (e) {
-      showToast(String(e));
+      showToast(String(e), 3000, "error");
     }
   }
 
@@ -358,13 +401,15 @@ export function LibraryPage() {
       setSearchHits(null);
       return;
     }
+    const req = ++searchReqRef.current;
     setSearching(true);
     try {
-      setSearchHits(await searchDocuments(q, activeWs.id));
+      const hits = await searchDocuments(q, activeWs.id);
+      if (req === searchReqRef.current) setSearchHits(hits);
     } catch (err) {
-      showToast(String(err));
+      if (req === searchReqRef.current) showToast(String(err), 3000, "error");
     } finally {
-      setSearching(false);
+      if (req === searchReqRef.current) setSearching(false);
     }
   }
 
@@ -374,7 +419,10 @@ export function LibraryPage() {
   }
 
   const editorFilePath = selectedDoc && activeWs ? joinPath(activeWs.path, selectedDoc.path) : null;
-  const { saving: librarySaving, saveNow: librarySaveNow } = useAutoSave(previewContent, libraryViewMode === "edit" ? editorFilePath : null);
+  const { saving: librarySaving } = useAutoSave(
+    previewContent,
+    libraryViewMode === "edit" ? editorFilePath : null
+  );
 
   // Markdown parsing is expensive; defer it so clicking a document updates the
   // selection/list immediately and the preview catches up right after paint.
@@ -434,111 +482,92 @@ export function LibraryPage() {
     ));
   }
 
-  function renderDocList() {
-    if (documents.length === 0) {
-      return (
-        <div className="flex flex-col items-center justify-center h-40 text-muted-foreground text-sm px-4 text-center">
-          <FileText size={28} className="mb-2 opacity-50" />
-          <p>{t("library.noDocuments")}</p>
-        </div>
-      );
-    }
+  function renderDocItem(doc: LibraryDocument) {
     return (
-      <div className="p-1.5 flex flex-col gap-0.5">
-        {documents.map((doc) => (
-          <button
-            key={doc.id}
-            className={cn(
-              "group w-full text-left rounded-md px-2.5 py-2 hover:bg-accent overflow-hidden",
-              selectedDoc?.id === doc.id && "bg-accent"
-            )}
-            onClick={() => openDocument(doc)}
+      <button
+        className={cn(
+          "group w-full text-left rounded-md px-2.5 py-2 hover:bg-accent overflow-hidden",
+          selectedDoc?.id === doc.id && "bg-accent"
+        )}
+        onClick={() => openDocument(doc)}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <FileText size={14} className="shrink-0 text-muted-foreground" />
+          <span className="text-sm truncate flex-1 min-w-0" title={doc.title}>
+            {doc.title}
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={t("library.favorites")}
+            aria-pressed={doc.favorite}
+            className="shrink-0 flex items-center"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleFavorite(doc);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleFavorite(doc);
+              }
+            }}
           >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <FileText size={14} className="shrink-0 text-muted-foreground" />
-              <span
-                className="text-sm truncate flex-1 min-w-0"
-                title={doc.title}
-              >
-                {doc.title}
-              </span>
-              <Star
-                size={14}
-                className={cn(
-                  "shrink-0 cursor-pointer",
-                  doc.favorite
-                    ? "text-amber-500 fill-amber-500"
-                    : "text-muted-foreground opacity-0 group-hover:opacity-100"
-                )}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleFavorite(doc);
-                }}
-              />
-            </div>
-            <div
-              className="mt-0.5 pl-5 text-xs text-muted-foreground truncate"
-              title={doc.path}
-            >
-              {displayPath(doc.path, activeWs?.path)}
-            </div>
-          </button>
-        ))}
-      </div>
+            <Star
+              size={14}
+              className={cn(
+                doc.favorite
+                  ? "text-amber-500 fill-amber-500"
+                  : "text-muted-foreground opacity-0 group-hover:opacity-100"
+              )}
+            />
+          </span>
+        </div>
+        <div
+          className="mt-0.5 pl-5 text-xs text-muted-foreground truncate"
+          title={doc.path}
+        >
+          {displayPath(doc.path, activeWs?.path)}
+        </div>
+      </button>
     );
   }
 
-  function renderSearchResults() {
-    if (!searchHits) return null;
-    if (searchHits.length === 0) {
-      return (
-        <div className="flex flex-col items-center justify-center h-40 text-muted-foreground text-sm px-4 text-center">
-          <Search size={28} className="mb-2 opacity-50" />
-          <p>{t("library.searchEmpty")}</p>
-        </div>
-      );
-    }
+  function renderHitItem(hit: SearchHit) {
     return (
-      <div className="p-1.5 flex flex-col gap-0.5">
-        {searchHits.map((hit) => (
-          <button
-            key={hit.document.id}
-            className={cn(
-              "w-full text-left rounded-md px-2.5 py-2 hover:bg-accent overflow-hidden",
-              selectedDoc?.id === hit.document.id && "bg-accent"
-            )}
-            onClick={() => openHit(hit)}
-          >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <FileText size={14} className="shrink-0 text-muted-foreground" />
-              <span
-                className="text-sm truncate flex-1 min-w-0"
-                title={hit.document.title}
-              >
-                {hit.document.title}
-              </span>
-              {hit.document.favorite && (
-                <Star size={13} className="shrink-0 text-amber-500 fill-amber-500" />
-              )}
+      <button
+        className={cn(
+          "w-full text-left rounded-md px-2.5 py-2 hover:bg-accent overflow-hidden",
+          selectedDoc?.id === hit.document.id && "bg-accent"
+        )}
+        onClick={() => openHit(hit)}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <FileText size={14} className="shrink-0 text-muted-foreground" />
+          <span className="text-sm truncate flex-1 min-w-0" title={hit.document.title}>
+            {hit.document.title}
+          </span>
+          {hit.document.favorite && (
+            <Star size={13} className="shrink-0 text-amber-500 fill-amber-500" />
+          )}
+        </div>
+        <div className="mt-0.5 pl-5 min-w-0">
+          {hit.snippet ? (
+            <div
+              className="text-xs text-muted-foreground line-clamp-3 [&_mark]:bg-yellow-300/60 [&_mark]:text-foreground [&_mark]:rounded-sm [&_mark]:px-0.5 break-words"
+              dangerouslySetInnerHTML={{ __html: hit.snippet }}
+            />
+          ) : (
+            <div
+              className="text-xs text-muted-foreground truncate"
+              title={hit.document.path}
+            >
+              {displayPath(hit.document.path, activeWs?.path)}
             </div>
-            <div className="mt-0.5 pl-5 min-w-0">
-              {hit.snippet ? (
-                <div
-                  className="text-xs text-muted-foreground line-clamp-3 [&_mark]:bg-yellow-300/60 [&_mark]:text-foreground [&_mark]:rounded-sm [&_mark]:px-0.5 break-words"
-                  dangerouslySetInnerHTML={{ __html: hit.snippet }}
-                />
-              ) : (
-                <div
-                  className="text-xs text-muted-foreground truncate"
-                  title={hit.document.path}
-                >
-                  {displayPath(hit.document.path, activeWs?.path)}
-                </div>
-              )}
-            </div>
-          </button>
-        ))}
-      </div>
+          )}
+        </div>
+      </button>
     );
   }
 
@@ -613,7 +642,7 @@ export function LibraryPage() {
                 type="button"
                 onClick={clearSearch}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="Clear search"
+                aria-label={t("library.clearSearch")}
               >
                 <X size={14} />
               </button>
@@ -680,30 +709,64 @@ export function LibraryPage() {
               </button>
             ))}
           </div>
-          <ScrollArea className="flex-1">
-            {searchHits ? renderSearchResults() : renderDocList()}
-          </ScrollArea>
+          {searchHits ? (
+            searchHits.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-sm px-4 text-center">
+                <Search size={28} className="mb-2 opacity-50" />
+                <p>{t("library.searchEmpty")}</p>
+              </div>
+            ) : (
+              <VirtualList
+                items={searchHits}
+                className="flex-1 min-h-0 p-1.5"
+                estimateSize={72}
+                gap={2}
+                itemKey={(hit) => hit.document.id}
+                renderItem={(hit) => renderHitItem(hit)}
+              />
+            )
+          ) : documents.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-sm px-4 text-center">
+              <FileText size={28} className="mb-2 opacity-50" />
+              <p>{t("library.noDocuments")}</p>
+            </div>
+          ) : (
+            <VirtualList
+              items={documents}
+              className="flex-1 min-h-0 p-1.5"
+              estimateSize={58}
+              gap={2}
+              itemKey={(doc) => doc.id}
+              renderItem={(doc) => renderDocItem(doc)}
+            />
+          )}
         </div>
 
         {/* Right: preview */}
         <section className="flex-1 flex flex-col overflow-hidden relative">
-          {selectedDoc && previewContent !== null ? (
+          {selectedDoc ? (
             <>
               <div className="px-4 py-2.5 border-b shrink-0">
                 <div className="flex items-center gap-2 min-w-0">
                   <h2 className="text-sm font-semibold truncate">
                     {selectedDoc.title}
                   </h2>
-                  <Star
-                    size={15}
-                    className={cn(
-                      "shrink-0 cursor-pointer",
-                      selectedDoc.favorite
-                        ? "text-amber-500 fill-amber-500"
-                        : "text-muted-foreground hover:text-amber-500"
-                    )}
+                  <button
+                    type="button"
                     onClick={() => toggleFavorite(selectedDoc)}
-                  />
+                    aria-pressed={selectedDoc.favorite}
+                    title={t("library.favorites")}
+                    className="shrink-0 flex items-center"
+                  >
+                    <Star
+                      size={15}
+                      className={cn(
+                        selectedDoc.favorite
+                          ? "text-amber-500 fill-amber-500"
+                          : "text-muted-foreground hover:text-amber-500"
+                      )}
+                    />
+                  </button>
                   <button
                     onClick={() => setLibraryViewMode((m) => (m === "preview" ? "edit" : "preview"))}
                     className="h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -733,20 +796,31 @@ export function LibraryPage() {
               </div>
               <div className="flex-1 min-h-0 relative">
                 <div className="absolute inset-0 overflow-auto">
-                  {libraryViewMode === "edit" ? (
+                  {/* Keep the editor mounted so switching to preview and back
+                      preserves undo history and cursor position. */}
+                  <div className={cn("h-full", libraryViewMode === "edit" ? "block" : "hidden")}>
                     <MarkdownEditor value={previewContent} onChange={setPreviewContent} />
-                  ) : (
-                    <MarkdownPreview content={deferredPreviewContent} />
-                  )}
-                </div>
-                {isRenderingPreview && libraryViewMode === "preview" && (
-                  <div className="absolute inset-0 flex items-start justify-center pt-4 pointer-events-none">
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground bg-background/95 border border-border rounded-full px-3 py-1.5 shadow-sm">
-                      <Loader2 size={12} className="animate-spin text-primary" />
-                      {t("library.rendering")}
-                    </div>
                   </div>
-                )}
+                  {libraryViewMode === "preview" &&
+                    (previewDocId === selectedDoc.id ? (
+                      <MarkdownPreview content={deferredPreviewContent} />
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                        <Loader2 size={14} className="animate-spin mr-2 text-primary" />
+                        {t("library.rendering")}
+                      </div>
+                    ))}
+                </div>
+                {isRenderingPreview &&
+                  libraryViewMode === "preview" &&
+                  previewDocId === selectedDoc.id && (
+                    <div className="absolute inset-0 flex items-start justify-center pt-4 pointer-events-none">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground bg-background/95 border border-border rounded-full px-3 py-1.5 shadow-sm">
+                        <Loader2 size={12} className="animate-spin text-primary" />
+                        {t("library.rendering")}
+                      </div>
+                    </div>
+                  )}
               </div>
             </>
           ) : (

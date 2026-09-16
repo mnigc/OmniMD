@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Folder, FolderOpen,
   Inbox,
@@ -20,10 +20,8 @@ import {
   getSupportedFormats,
   listFilesInFolder,
 } from "../api/tauriApi";
-import { pickOutputDir } from "../api/dialogs";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { pickOutputDir, confirmDialog } from "../api/dialogs";
 import { useBatchStore } from "../store/useBatchStore";
-import type { ConversionTask } from "../types";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { showToast } from "../lib/toast";
 import { useI18n } from "../i18n";
@@ -37,40 +35,76 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
-import { ScrollArea } from "../components/ui/scroll-area";
+import { VirtualList } from "../components/VirtualList";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "../components/ui/tooltip";
 
+const MAX_RENDERED_TASKS = 200;
+
+function StatusChip({
+  icon: Icon,
+  count,
+  label,
+  color,
+  spin,
+}: {
+  icon: typeof Loader2;
+  count: number;
+  label: string;
+  color: string;
+  spin?: boolean;
+}) {
+  return (
+    <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-muted/50 border border-border/60">
+      <Icon size={12} className={cn(color, spin && count > 0 && "animate-spin")} />
+      <span className="text-xs font-medium tabular-nums">{count}</span>
+      <span className="text-xs text-muted-foreground">{label}</span>
+    </div>
+  );
+}
+
 export function HomePage() {
   const { t } = useI18n();
-  const { tasks, start, loading, cancelAll, retryFailed, clearDone, enqueue, concurrency, setConcurrency } = useBatchStore();
-  const { defaultOutputDir } = useSettingsStore();
+  const {
+    tasks,
+    start,
+    loading,
+    cancelAll,
+    retryFailed,
+    clearDone,
+    enqueue,
+    concurrency,
+    setConcurrency,
+  } = useBatchStore();
+  const { defaultOutputDir, setDefaultOutputDir } = useSettingsStore();
 
-  const [outputDir, setOutputDir] = useState(defaultOutputDir);
   const [outputLocationMode, setOutputLocationMode] = useState<"sourceDir" | "custom">("sourceDir");
   const [supportedFormats, setSupportedFormats] = useState<string[]>([]);
 
   useEffect(() => {
-    getSupportedFormats().then(setSupportedFormats).catch(() => {});
+    let alive = true;
+    getSupportedFormats()
+      .then((f) => {
+        if (alive) setSupportedFormats(f);
+      })
+      .catch(() => {});
     (async () => {
       try {
         const state = useSettingsStore.getState();
         if (state.defaultOutputDir) return;
         const dir = await getDefaultOutputDir();
-        if (dir) state.setDefaultOutputDir(dir);
+        if (alive && dir) state.setDefaultOutputDir(dir);
       } catch {
         // ignore
       }
     })();
+    return () => {
+      alive = false;
+    };
   }, []);
-
-  useEffect(() => {
-    if (outputLocationMode === "custom" && !outputDir)
-      setOutputDir(defaultOutputDir);
-  }, [defaultOutputDir, outputLocationMode]);
 
   useEffect(() => {
     useBatchStore.getState().refreshTasks();
@@ -79,10 +113,10 @@ export function HomePage() {
 
   const inferOutputDir = useCallback(
     (path: string): string => {
-      if (outputLocationMode === "custom") return outputDir || ".";
+      if (outputLocationMode === "custom") return defaultOutputDir || ".";
       return path.replace(/\\/g, "/").split("/").slice(0, -1).join("/") || ".";
     },
-    [outputDir, outputLocationMode, defaultOutputDir]
+    [defaultOutputDir, outputLocationMode]
   );
 
   const handleFiles = useCallback(
@@ -106,29 +140,31 @@ export function HomePage() {
         const taskId = await enqueue(path, outputPath);
         if (!taskId) {
           console.error("Failed to enqueue:", path);
-          showToast(t("toast.filePickFailed"), 3000);
         }
       }
       await useBatchStore.getState().refreshTasks();
       await useBatchStore.getState().refreshSummary();
     },
-    [inferOutputDir, enqueue, t]
+    [inferOutputDir, enqueue]
   );
 
-  const addInputPaths = useCallback(async (paths: string[]) => {
-    if (!paths.length) return;
-    let expanded: string[] = [];
-    for (const p of paths) {
-      try {
-        expanded.push(...(await listFilesInFolder(p)));
-      } catch {
-        expanded.push(p);
+  const addInputPaths = useCallback(
+    async (paths: string[]) => {
+      if (!paths.length) return;
+      const expanded: string[] = [];
+      for (const p of paths) {
+        try {
+          expanded.push(...(await listFilesInFolder(p)));
+        } catch {
+          expanded.push(p);
+        }
       }
-    }
-    const unique = [...new Set(expanded)];
-    if (unique.length === 0) return;
-    handleFiles(unique);
-  }, [handleFiles]);
+      const unique = [...new Set(expanded)];
+      if (unique.length === 0) return;
+      handleFiles(unique);
+    },
+    [handleFiles]
+  );
 
   const handleFolder = useCallback(
     (folderPath: string) => {
@@ -139,44 +175,49 @@ export function HomePage() {
   );
 
   const handleBrowseOutputDir = useCallback(async () => {
-    const dir = await pickOutputDir();
-    if (dir) setOutputDir(dir);
-  }, []);
+    try {
+      const dir = await pickOutputDir(t("home.outputDir"));
+      if (dir) setDefaultOutputDir(dir);
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : t("toast.folderPickFailed"),
+        3000,
+        "error"
+      );
+    }
+  }, [setDefaultOutputDir, t]);
 
   const handleOpenOutputDir = useCallback(async () => {
     try {
-      await openFolder(outputDir);
-    } catch {
-      // ignore
+      await openFolder(defaultOutputDir);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : t("history.openFolderError"), 3000, "error");
     }
-  }, [outputDir]);
+  }, [defaultOutputDir, t]);
 
-  const orderedTasks = [...tasks]
-    .sort((a, b) => {
-      const rank = (s: string) => (s === "Processing" ? 0 : s === "Pending" ? 1 : s === "Failed" ? 3 : 2);
-      return rank(a.status) - rank(b.status);
-    });
-  const MAX_RENDERED_TASKS = 200;
-  const visibleTasks = orderedTasks.slice(0, MAX_RENDERED_TASKS);
-  const hiddenCount = orderedTasks.length - visibleTasks.length;
-  const totalTasks = tasks.length;
-  const pendingCount = tasks.filter((t) => t.status === "Pending").length;
-  const processingCount = tasks.filter((t) => t.status === "Processing").length;
-  const completedCount = tasks.filter((t) => t.status === "Completed").length;
-  const failedCount = tasks.filter((t) => t.status === "Failed").length;
-
-  const StatusChip = ({ icon: Icon, count, label, color }: {
-    icon: typeof Loader2;
-    count: number;
-    label: string;
-    color: string;
-  }) => (
-    <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-muted/50 border border-border/60">
-      <Icon size={12} className={color} />
-      <span className="text-xs font-medium tabular-nums">{count}</span>
-      <span className="text-xs text-muted-foreground">{label}</span>
-    </div>
-  );
+  const { visibleTasks, hiddenCount, totalTasks, pendingCount, processingCount, completedCount, failedCount, hasProcessing } =
+    useMemo(() => {
+      const rank = (s: string) =>
+        s === "Processing" ? 0 : s === "Pending" ? 1 : s === "Failed" ? 3 : 2;
+      const ordered = [...tasks].sort((a, b) => rank(a.status) - rank(b.status));
+      const counts = { pending: 0, processing: 0, completed: 0, failed: 0 };
+      for (const task of tasks) {
+        if (task.status === "Pending") counts.pending++;
+        else if (task.status === "Processing") counts.processing++;
+        else if (task.status === "Completed") counts.completed++;
+        else if (task.status === "Failed") counts.failed++;
+      }
+      return {
+        visibleTasks: ordered.slice(0, MAX_RENDERED_TASKS),
+        hiddenCount: ordered.length - Math.min(ordered.length, MAX_RENDERED_TASKS),
+        totalTasks: tasks.length,
+        pendingCount: counts.pending,
+        processingCount: counts.processing,
+        completedCount: counts.completed,
+        failedCount: counts.failed,
+        hasProcessing: counts.processing > 0,
+      };
+    }, [tasks]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -258,8 +299,8 @@ export function HomePage() {
               <div className="flex items-center gap-2 flex-1 min-w-[240px]">
                 <Input
                   type="text"
-                  value={outputDir}
-                  onChange={(e) => setOutputDir(e.target.value)}
+                  value={defaultOutputDir}
+                  onChange={(e) => setDefaultOutputDir(e.target.value)}
                   placeholder={t("home.outputDirPlaceholder")}
                   className="flex-1 min-w-0 h-7 text-xs"
                 />
@@ -267,7 +308,7 @@ export function HomePage() {
                   <FolderOpen size={13} />
                   {t("home.browse")}
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleOpenOutputDir} disabled={!outputDir} title={t("home.openHint")} className="h-7">
+                <Button variant="outline" size="sm" onClick={handleOpenOutputDir} disabled={!defaultOutputDir} title={t("home.openHint")} className="h-7">
                   <Folder size={13} />
                   {t("home.open")}
                 </Button>
@@ -285,7 +326,7 @@ export function HomePage() {
                 <span className="text-muted-foreground tabular-nums">({totalTasks})</span>
               </CardTitle>
               <div className="flex items-center gap-1">
-                {failedCount > 0 && !tasks.some((t) => t.status === "Processing") && (
+                {failedCount > 0 && !hasProcessing && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button variant="ghost" size="icon" onClick={retryFailed} className="h-7 w-7">
@@ -299,7 +340,7 @@ export function HomePage() {
                   variant="ghost"
                   size="icon"
                   onClick={clearDone}
-                  disabled={totalTasks === 0 || tasks.some((t) => t.status === "Processing")}
+                  disabled={totalTasks === 0 || hasProcessing}
                   title={t("home.clearSession")}
                   className="h-7 w-7"
                 >
@@ -308,7 +349,7 @@ export function HomePage() {
               </div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <StatusChip icon={Loader2} count={processingCount} label={t("taskStatus.processing")} color="text-primary animate-spin" />
+              <StatusChip icon={Loader2} count={processingCount} label={t("taskStatus.processing")} color="text-primary" spin />
               <StatusChip icon={CheckCircle2} count={completedCount} label={t("taskStatus.completed")} color="text-success" />
               <StatusChip icon={XCircle} count={failedCount} label={t("taskStatus.failed")} color="text-destructive" />
               <StatusChip icon={AlertTriangle} count={pendingCount} label={t("taskStatus.pending")} color="text-warning" />
@@ -316,12 +357,12 @@ export function HomePage() {
           </CardHeader>
 
           <CardContent className="p-3 pt-0 shrink-0">
-            {tasks.some((t) => t.status === "Processing") ? (
+            {hasProcessing ? (
               <Button
                 variant="destructive"
                 className="w-full"
                 onClick={async () => {
-                  if (await confirm(t("home.cancelConfirm"), { title: t("home.cancel"), kind: "warning" })) {
+                  if (await confirmDialog(t("home.cancelConfirm"), t("home.cancel"))) {
                     cancelAll();
                   }
                 }}
@@ -331,14 +372,14 @@ export function HomePage() {
                 {t("home.cancel")}
               </Button>
             ) : (
-              <Button className="w-full" onClick={start} disabled={pendingCount === 0}>
+              <Button className="w-full" onClick={start} disabled={pendingCount === 0 || loading}>
                 <Play size={14} />
                 {t("home.startConversion")}
               </Button>
             )}
           </CardContent>
 
-          <CardContent className="flex-1 min-h-0 p-0">
+          <CardContent className="flex-1 min-h-0 p-0 flex flex-col">
             {totalTasks === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-center h-full">
                 <Inbox className="mx-auto mb-3 text-muted-foreground/40" size={32} />
@@ -348,18 +389,21 @@ export function HomePage() {
                 </p>
               </div>
             ) : (
-              <ScrollArea className="h-full overflow-y-auto">
-                <div className="space-y-1.5 p-3 pt-1">
-                  {visibleTasks.map((tsk) => (
-                    <TaskItem key={tsk.id} task={tsk as any} compact />
-                  ))}
-                  {hiddenCount > 0 && (
-                    <p className="text-center text-xs text-muted-foreground py-2">
-                      {t("batch.moreHidden").replace("{n}", String(hiddenCount))}
-                    </p>
-                  )}
-                </div>
-              </ScrollArea>
+              <>
+                <VirtualList
+                  items={visibleTasks}
+                  className="flex-1 min-h-0 px-3 pt-1"
+                  estimateSize={56}
+                  gap={6}
+                  itemKey={(tsk) => tsk.id}
+                  renderItem={(tsk) => <TaskItem task={tsk} compact />}
+                />
+                {hiddenCount > 0 && (
+                  <p className="text-center text-xs text-muted-foreground py-2 shrink-0">
+                    {t("batch.moreHidden", { n: MAX_RENDERED_TASKS })}
+                  </p>
+                )}
+              </>
             )}
           </CardContent>
         </Card>

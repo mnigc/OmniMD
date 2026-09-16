@@ -8,6 +8,7 @@ import { closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirro
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { tags } from "@lezer/highlight";
+import { markdownKeymap } from "../lib/markdownCommands";
 
 const ExternalChange = Annotation.define<boolean>();
 
@@ -69,6 +70,7 @@ export function MarkdownEditor({ value, onChange, readOnly = false, className, o
         crosshairCursor(),
         highlightActiveLine(),
         highlightSelectionMatches(),
+        markdownKeymap,
         keymap.of([
           ...defaultKeymap,
           ...searchKeymap,

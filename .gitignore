@@ -19,9 +19,12 @@ bundle_extras/
 # ===== Node / Frontend =====
 node_modules/
 frontend/dist/
+frontend/.vite/
 frontend/.pnpm-store/
 .pnpm-store/
+coverage/
 *.tsbuildinfo
+*.local
 package-lock.json
 yarn.lock
 

@@ -20,16 +20,36 @@
         "shadow": true
       }
     ],
-    "withGlobalTauri": true
+    "withGlobalTauri": false,
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1421 http://localhost:1421"
+    }
   },
   "bundle": {
     "active": true,
-    "targets": "msi",
-    "windows": {
-      "nsis": {
-        "installMode": "currentUser"
+    "targets": "all",
+    "category": "Productivity",
+    "shortDescription": "Convert anything to Markdown",
+    "longDescription": "OmniMD converts documents (Word, PowerPoint, Excel, OpenDocument, RTF, EPUB, CSV, PDF) into clean Markdown, with a local SQLite knowledge base and full-text search.",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYyNDVFOTgwRUMwQkEwRTQKUldUa29BdnNnT2xGWWdFRlNaajNwNEx3MzdMcUhOMk9BZkpEU0Q0ZEZ3S1ZWSVc3NnZnVU9ZaU8K",
+      "endpoints": [
+        "https://github.com/mnigc/OmniMD/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
-    },
-    "icon": ["icons/icon.ico"]
+    }
   }
 }

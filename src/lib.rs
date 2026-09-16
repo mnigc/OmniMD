@@ -3,20 +3,19 @@ pub mod engine;
 pub mod file_utils;
 pub mod markdown_pipeline;
 pub mod db;
+pub mod text_utils;
 
 use std::sync::Mutex;
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::time::Duration;
 
 use db::{
     db as db_handle, DocumentDto, FolderDto, ScanResultDto, SearchHitDto, WorkspaceDto,
 };
 use engine::batch_queue::BatchQueue;
 use engine::anydoc_engine::AnyDocEngine;
-use engine::model_manager::ModelManager;
 use engine::DocumentEngine;
 use models::task::{
     BatchSummaryDto, BatchTaskDto, Cancellation, ConversionError, ConversionResult,
@@ -80,21 +79,17 @@ pub struct ConverterInfo {
 }
 
 struct AppState {
-    tasks: Mutex<HashMap<String, ConversionTask>>,
     cancellations: Mutex<HashMap<String, Cancellation>>,
     queue_engine: Mutex<Option<Arc<dyn DocumentEngine>>>,
     batch_queue: BatchQueue,
-    model_manager: ModelManager,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         AppState {
-            tasks: Mutex::new(HashMap::new()),
             cancellations: Mutex::new(HashMap::new()),
             queue_engine: Mutex::new(None),
             batch_queue: BatchQueue::new(3),
-            model_manager: ModelManager::new(),
         }
     }
 }
@@ -108,7 +103,7 @@ impl AppState {
 
     /// Lazily create and cache the engine for the batch queue.
     fn queue_engine(&self) -> Arc<dyn DocumentEngine> {
-        let mut guard = self.queue_engine.lock().unwrap();
+        let mut guard = self.queue_engine.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(e) = guard.as_ref() {
             return e.clone();
         }
@@ -198,8 +193,11 @@ async fn convert_file(
 
     let state = get_state(&app)?;
     let cancellation = Cancellation::new();
-    state.cancellations.lock().unwrap().insert(task.id.clone(), cancellation.clone());
-    state.tasks.lock().unwrap().insert(task.id.clone(), task.clone());
+    state
+        .cancellations
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(task.id.clone(), cancellation.clone());
     emit_progress(&app, &task);
 
     // Create a progress callback that emits events to the frontend.
@@ -224,9 +222,28 @@ async fn convert_file(
     });
 
     let engine: Arc<dyn DocumentEngine> = state.create_engine();
-    let result = match engine
-        .convert(&task, Some(progress_cb), Some(&cancellation))
-        .await
+    // Run the (CPU-bound, synchronous) parse on a blocking thread so it never
+    // occupies a tokio worker and starves the rest of the app.
+    let engine_task = task.clone();
+    let engine_cancel = cancellation.clone();
+    let engine_progress = progress_cb.clone();
+    let result = match tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::block_on(engine.convert(
+            &engine_task,
+            Some(engine_progress),
+            Some(&engine_cancel),
+        ))
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(ConversionError {
+            code: ErrorCode::EngineError,
+            message: format!("转换任务异常退出: {e}"),
+            stage: ConversionStage::Parsing,
+            retryable: true,
+            page: None,
+        })
+    })
     {
         Ok(r) => r,
         Err(e) => {
@@ -235,14 +252,12 @@ async fn convert_file(
                 task.error = Some("任务已取消".to_string());
                 emit_status(&app, &task);
                 cleanup_cancellation(&state, &task.id);
-                cleanup_task(&state, &task.id);
                 return Err("cancelled".to_string());
             }
             task.status = TaskStatus::Failed;
             task.error = Some(e.message.clone());
             emit_status(&app, &task);
             cleanup_cancellation(&state, &task.id);
-            cleanup_task(&state, &task.id);
             return Err(format!("[{:?}]: {}", e.code, e.message));
         }
     };
@@ -252,7 +267,6 @@ async fn convert_file(
     emit_progress(&app, &task);
     emit_status(&app, &task);
     cleanup_cancellation(&state, &task.id);
-    cleanup_task(&state, &task.id);
 
     Ok(result_to_dto(&result))
 }
@@ -261,18 +275,6 @@ async fn convert_file(
 fn cleanup_cancellation(state: &tauri::State<'_, AppState>, task_id: &str) {
     state
         .cancellations
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(task_id);
-}
-
-/// Remove a completed/failed/cancelled task from the tasks map to prevent
-/// unbounded memory growth. The frontend receives the result directly via the
-/// command return value, so the map entry is no longer needed after the task
-/// reaches a terminal state.
-fn cleanup_task(state: &tauri::State<'_, AppState>, task_id: &str) {
-    state
-        .tasks
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(task_id);
@@ -419,45 +421,80 @@ async fn search_documents(
     .map_err(|e| format!("检索任务异常退出: {e}"))?
 }
 
-/// Return the default output directory: the directory that contains the
-/// running binary, with an `output/` subdirectory appended.
+/// Return the default output directory. This lives under the app data dir
+/// (`%APPDATA%/<identifier>/output` on Windows) rather than next to the
+/// executable, because the install directory is not writable for a normal
+/// user after an MSI install (Program Files).
 #[tauri::command]
-fn get_default_output_dir() -> String {
-    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let install_dir = exe.parent().unwrap_or(exe.as_path());
-    let out = install_dir.join("output");
+fn get_default_output_dir(app: tauri::AppHandle) -> String {
+    let base = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let out = base.join("output");
+    let _ = std::fs::create_dir_all(&out);
     out.to_string_lossy().replace("\\", "/").to_string()
 }
 
 /// Open the given directory in the system file manager.
+///
+/// The path is passed as a single argument to the platform opener (never
+/// through `cmd.exe`), and must resolve to a real directory, so a crafted
+/// path cannot inject shell metacharacters or launch an arbitrary program.
 #[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
-    if path.trim().is_empty() {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
         return Ok(());
     }
+    let p = std::path::Path::new(trimmed);
+    let dir = if p.is_dir() {
+        p.to_path_buf()
+    } else if p.is_file() {
+        p.parent().map(|x| x.to_path_buf()).unwrap_or_else(|| p.to_path_buf())
+    } else {
+        return Err(format!("目录不存在: {}", trimmed));
+    };
+
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .arg("/c")
-            .arg("start")
-            .arg("")
-            .arg(&path)
+        // `explorer` does not interpret `&`/`|`/`^`; args are passed directly.
+        std::process::Command::new("explorer")
+            .arg(&dir)
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
-            .arg(&path)
+            .arg(&dir)
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
-            .arg(&path)
+            .arg(&dir)
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Guard for text-file commands: reject NUL bytes and restrict access to
+/// Markdown-ish text files. This is defense in depth alongside the CSP and
+/// the sanitized Markdown preview.
+fn ensure_text_path(path: &str) -> Result<(), String> {
+    if path.contains('\0') {
+        return Err("非法路径".to_string());
+    }
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !matches!(ext.as_str(), "md" | "markdown" | "txt") {
+        return Err(format!("仅支持 Markdown/文本文件，收到: .{}", ext));
     }
     Ok(())
 }
@@ -483,16 +520,21 @@ fn get_app_version(app: tauri::AppHandle) -> String {
 
 #[tauri::command]
 fn write_text_file(path: String, content: String) -> Result<(), String> {
+    ensure_text_path(&path)?;
     fs::write(&path, &content).map_err(|e| format!("写入文件失败: {}", e))
 }
 
 #[tauri::command]
 fn read_text_file(path: String) -> Result<String, String> {
+    ensure_text_path(&path)?;
     fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {}", e))
 }
 
 #[tauri::command]
 fn list_files_in_folder(path: String) -> Result<Vec<String>, String> {
+    if path.contains('\0') {
+        return Err("非法路径".to_string());
+    }
     let files = file_utils::list_files_flat(&path, file_utils::get_supported_extensions_ref());
     Ok(files
         .iter()
@@ -573,7 +615,9 @@ async fn batch_clear_done(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn batch_set_concurrency(app: tauri::AppHandle, concurrency: u32) -> Result<(), String> {
     let state = get_state(&app)?;
-    state.batch_queue.set_concurrency(concurrency);
+    // Clamp to a sane range: 0 would make the worker spin forever without ever
+    // claiming a task.
+    state.batch_queue.set_concurrency(concurrency.clamp(1, 16));
     Ok(())
 }
 
@@ -590,70 +634,24 @@ fn batch_get_summary(app: tauri::AppHandle) -> Result<BatchSummaryDto, String> {
 }
 
 
-// ---------------------------------------------------------------------------
-// Model management commands
-// ---------------------------------------------------------------------------
-
-use engine::model_manager::{ModelInfoDto, CacheInfoDto};
-
-#[tauri::command]
-async fn list_models(app: tauri::AppHandle) -> Result<Vec<ModelInfoDto>, String> {
-    let state = get_state(&app)?;
-    state.model_manager.list_models().await
+/// Directory that holds the runtime log files (created on demand).
+fn log_dir() -> std::path::PathBuf {
+    std::env::var("APPDATA")
+        .map(|p| std::path::PathBuf::from(p).join("OmniMD").join("logs"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("omnimd_logs"))
 }
 
-#[tauri::command]
-async fn get_model_status(app: tauri::AppHandle, model_name: String) -> Result<ModelInfoDto, String> {
-    let state = get_state(&app)?;
-    state.model_manager.get_model_status(&model_name).await
-}
+const LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 
-#[tauri::command]
-async fn download_model(app: tauri::AppHandle, model_name: String) -> Result<(), String> {
-    let state = get_state(&app)?;
-    state.model_manager.download_model(&app, &model_name).await
-}
-
-#[tauri::command]
-async fn cancel_model_download(app: tauri::AppHandle) -> Result<(), String> {
-    let state = get_state(&app)?;
-    state.model_manager.cancel_download(&app).await
-}
-
-#[tauri::command]
-async fn get_cache_info(app: tauri::AppHandle) -> Result<CacheInfoDto, String> {
-    let state = get_state(&app)?;
-    state.model_manager.get_cache_info().await
-}
-
-#[tauri::command]
-async fn clear_model_cache(app: tauri::AppHandle) -> Result<(), String> {
-    let state = get_state(&app)?;
-    state.model_manager.clear_cache().await
-}
-
-#[tauri::command]
-async fn set_model_source(app: tauri::AppHandle, source: String) -> Result<(), String> {
-    let state = get_state(&app)?;
-    state.model_manager.set_source(source).await
-}
-
-#[tauri::command]
-async fn get_model_source(app: tauri::AppHandle) -> Result<String, String> {
-    let state = get_state(&app)?;
-    state.model_manager.get_source().await
-}
-
-#[tauri::command]
-async fn import_offline_model(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let state = get_state(&app)?;
-    state.model_manager.import_offline(&app, &path).await
-}
-
-#[tauri::command]
-async fn check_model_update(app: tauri::AppHandle, model_name: String) -> Result<bool, String> {
-    let state = get_state(&app)?;
-    state.model_manager.check_update(&model_name).await
+/// Rotate `path` to `path.1` once it exceeds `LOG_MAX_BYTES`, so a long-running
+/// install cannot grow the log without bound.
+fn rotate_log(path: &std::path::Path) {
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > LOG_MAX_BYTES {
+            let backup = path.with_extension("log.1");
+            let _ = std::fs::rename(path, &backup);
+        }
+    }
 }
 
 /// Initialize a tracing subscriber that writes to a log file under the
@@ -663,11 +661,11 @@ async fn check_model_update(app: tauri::AppHandle, model_name: String) -> Result
 fn init_logging() {
     use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
 
-    let log_dir = std::env::var("APPDATA")
-        .map(|p| std::path::PathBuf::from(p).join("OmniMD").join("logs"))
-        .unwrap_or_else(|_| std::env::temp_dir().join("omnimd_logs"));
+    let log_dir = log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
-    let file = std::fs::File::create(log_dir.join("omnimd.log")).ok();
+    let log_path = log_dir.join("omnimd.log");
+    rotate_log(&log_path);
+    let file = std::fs::File::create(&log_path).ok();
 
     // BoxMakeWriter unifies the two writer types so both match arms share one
     // concrete type.
@@ -688,9 +686,7 @@ fn init_logging() {
 /// Capture panics (which otherwise only go to stderr and are discarded in a
 /// bundled app) into a dedicated log file so a hard crash is diagnosable.
 fn install_panic_hook() {
-    let log_dir = std::env::var("APPDATA")
-        .map(|p| std::path::PathBuf::from(p).join("OmniMD").join("logs"))
-        .unwrap_or_else(|_| std::env::temp_dir().join("omnimd_logs"));
+    let log_dir = log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
     let panic_file = log_dir.join("omnimd.panic.log");
     std::panic::set_hook(Box::new(move |info| {
@@ -746,8 +742,18 @@ pub fn run() {
         .collect();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+        // Must be registered first: a second launch focuses the existing
+        // window instead of running a second process over the same database.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             // Forward file-path argv from the shell context menu to the frontend.
             if !cli_args.is_empty() {
@@ -794,16 +800,6 @@ pub fn run() {
             batch_set_concurrency,
             batch_list_tasks,
             batch_get_summary,
-            list_models,
-            get_model_status,
-            download_model,
-            cancel_model_download,
-            get_cache_info,
-            clear_model_cache,
-            set_model_source,
-            get_model_source,
-            import_offline_model,
-            check_model_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

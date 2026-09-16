@@ -10,7 +10,7 @@
 
 将 PDF、Word、Excel、PPT、EPUB、HTML 等文档一键转换为 Markdown 的跨平台桌面应用。
 
-基于 **Tauri 2** + **Rust** + **React** 构建，核心转换引擎由 [MinerU](https://github.com/opendatalab/MinerU) 3.x 提供。
+基于 **Tauri 2** + **Rust** + **React** 构建，核心转换引擎由 [AnyDoc](https://github.com/firecrawl/anydoc) 提供（本地纯 Rust 引擎，无需 ML 模型、无需联网）。
 
 </div>
 
@@ -18,11 +18,12 @@
 
 ## ✨ 功能特性
 
-- **多格式支持** — PDF、DOC/DOCX、PPT/PPTX、XLS/XLSX、EPUB、CSV、TXT、HTML、ODT/ODS/ODP、RTF 等 20+ 种格式
+- **多格式支持** — PDF、DOC/DOCX、PPT/PPTX、XLS/XLSX、EPUB、CSV、ODT/ODS/ODP、RTF 等 20+ 种格式
+- **毫秒级转换** — 纯 Rust 进程内引擎，无需 Python、无需下载模型
 - **批量转换** — 一次性拖入多个文件，并发转换，实时进度反馈
-- **资源提取** — 自动提取文档中的图片等资源，保存到 `assets/` 目录
+- **资源提取** — 自动提取文档内嵌图片，保存到每篇文档的 `assets/` 目录
 - **智能格式识别** — 通过文件魔数（magic bytes）自动检测格式，不依赖扩展名
-- **文本直通** — 纯文本、JSON、XML、HTML 等直接透传为 Markdown 代码块/段落
+- **Markdown 工作台** — 知识库（文件夹树、中英文全文检索、收藏、最近）、预览与编辑
 - **本地优先** — 全部转换在本地完成，文件不上传，隐私安全
 - **桌面原生体验** — Tauri 打包为原生应用，体积小、启动快
 
@@ -30,13 +31,15 @@
 
 > TODO: 添加截图
 
-应用包含三个主页面：
+主要页面：
 
 | 页面 | 功能 |
 |------|------|
-| **Home** | 文件浏览与快速入口 |
-| **Convert** | 单文件转换，支持预览输出 |
-| **Batch** | 批量转换，并发控制与进度追踪 |
+| **Home** | 拖入文件/文件夹，设置并发数与输出位置，跟踪转换队列 |
+| **Library** | 工作区文件夹、文档列表、全文搜索、收藏、最近、预览与编辑 |
+| **History** | 全部已完成 / 失败 / 取消的转换记录 |
+| **Preview** | 单文档的源码 / 预览 / 分栏视图 |
+| **Settings** | 主题、语言、默认输出目录 |
 
 ## 🚀 快速开始
 
@@ -79,7 +82,7 @@ pnpm tauri build    # 打包生成安装包
 
 ### 开箱即用
 
-应用启动即可直接转换文档（网页抓取走内置提取器）；本地文件解析所需的识别引擎需另行接入。
+应用启动即可直接转换文档，无需安装 Python、无需下载模型、无需联网。
 
 ## 🏗️ 项目结构
 
@@ -88,19 +91,20 @@ OmniMD/
 ├── src/                    # Rust 后端
 │   ├── main.rs             # 程序入口
 │   ├── lib.rs              # Tauri 命令注册（前端调用的接口）
-│   ├── pipeline.rs         # 转换流水线（读取 → 转换 → 写出）
+│   ├── markdown_pipeline.rs# 后处理（标题/列表规范化、清理、统计）
 │   ├── file_utils.rs       # 路径处理 / 格式白名单
-│   ├── converters/         # MinerU 引擎集成（HTTP client + 运行时管理）
+│   ├── db/                 # SQLite 工作区数据层（元数据 + FTS5 检索）
+│   ├── engine/             # DocumentEngine trait + AnyDoc 实现 + 批量队列
 │   └── models/             # Document / Task / Asset 数据结构
 ├── frontend/               # React + TypeScript 前端
 │   ├── src/
 │   │   ├── App.tsx         # 应用骨架与导航
-│   │   ├── pages/          # Home / Convert / Batch 页面
+│   │   ├── pages/          # Home / Library / History / Preview / Settings 页面
 │   │   ├── api/            # 调用 Rust 后端的 invoke 封装
 │   │   ├── store/          # zustand 状态管理
 │   │   ├── components/     # 复用组件
 │   │   └── types/          # 共享类型定义
-│   └── vite.config.ts      # Vite 配置（端口 1420）
+│   └── vite.config.ts      # Vite 配置（端口 1421）
 ├── tauri.conf.json         # Tauri 应用配置
 ├── capabilities/           # Tauri 权限配置
 ├── Cargo.toml              # Rust 依赖
@@ -114,10 +118,12 @@ OmniMD/
 | 命令 | 入参 | 返回 | 说明 |
 |------|------|------|------|
 | `convert_file` | `sourcePath`, `outputDir` | `ConversionResult` | 转换单文件 |
+| `cancel_task` | `taskId` | — | 协作式取消转换 |
 | `get_supported_formats` | — | `string[]` | 支持的扩展名列表 |
-| `get_converter_info` | — | `ConverterInfo` | 转换器名称与支持格式 |
+| `batch_enqueue` / `batch_start` / `batch_cancel_all` … | 见 `src/lib.rs` | — | 批量队列控制 |
+| `list_workspaces` / `scan_workspace` / `list_documents` / `search_documents` … | 见 `src/lib.rs` | — | 知识库数据层（SQLite + FTS5） |
 
-转换过程中通过 Tauri 事件 `task-progress` / `task-status` 推送进度，前端可监听并实时更新 UI。
+转换过程中通过 Tauri 事件 `task-progress` / `task-status`（批量另有 `batch-progress` / `batch-status` / `batch-summary`）推送进度，前端可监听并实时更新 UI。
 
 ## 🧪 测试
 
@@ -151,10 +157,12 @@ TODO: 添加 LICENSE 文件（建议 MIT 或 Apache-2.0）。
 
 ## 🗺️ 路线图
 
-- [x] Phase 1 MVP — 单文件 / 批量转换
-- [ ] Settings 页面配置（输出格式、并发数、OCR 开关）
-- [ ] OCR 图片文字识别（模型结构已预留于 `src/models/ocr.rs`）
-- [ ] 拖拽文件夹递归转换
+- [x] 单文件 / 批量转换（本地纯 Rust 引擎）
+- [x] 知识库（工作区文件夹、全文检索、收藏、最近）
+- [x] 预览 / 编辑（自动保存）
+- [x] 转换历史
+- [x] 主题（浅色 / 深色 / 跟随系统）与语言（中 / 英）切换
+- [ ] Windows 右键菜单集成
 - [ ] 跨平台构建（macOS / Linux）
 
 ## 📖 更多文档

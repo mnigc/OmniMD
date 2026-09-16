@@ -8,7 +8,10 @@ use tauri::Emitter;
 use tokio::sync::Mutex;
 
 use crate::engine::DocumentEngine;
-use crate::models::task::{BatchSummaryDto, Cancellation, ConversionStage, ConversionTask, ProgressCallback, TaskStatus};
+use crate::models::task::{
+    BatchSummaryDto, Cancellation, ConversionError, ConversionStage, ConversionTask, ErrorCode,
+    ProgressCallback, TaskStatus,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,11 +66,46 @@ fn get_pending(app: &tauri::AppHandle, limit: u64) -> Vec<crate::models::task::B
     }
 }
 
+/// Removes a task from the in-flight set when its conversion thread exits,
+/// including on panic. Without this, a panic inside the engine would leak the
+/// concurrency slot forever and eventually stall the whole queue.
+struct ActiveTaskGuard {
+    task_id: String,
+    cancellation: Arc<Cancellation>,
+    active_tasks: Arc<Mutex<HashMap<String, Arc<Cancellation>>>>,
+    rt: tokio::runtime::Handle,
+}
+
+impl Drop for ActiveTaskGuard {
+    fn drop(&mut self) {
+        let task_id = self.task_id.clone();
+        let cancellation = self.cancellation.clone();
+        let active_tasks = self.active_tasks.clone();
+        // Runs on the dedicated std thread (not inside the async runtime), so
+        // `block_on` here is safe and cannot re-enter the runtime.
+        self.rt.block_on(async move {
+            let mut guard = active_tasks.lock().await;
+            // Only free the slot if it still belongs to THIS run: a paused task
+            // that was resumed may have installed a fresh cancellation handle,
+            // which must not be removed by the stale thread.
+            if let Some(current) = guard.get(&task_id) {
+                if Arc::ptr_eq(current, &cancellation) {
+                    guard.remove(&task_id);
+                }
+            }
+        });
+    }
+}
+
 pub struct BatchQueue {
     running: Arc<AtomicBool>,
     concurrency: Arc<AtomicU32>,
     active_tasks: Arc<Mutex<HashMap<String, Arc<Cancellation>>>>,
     paused_tasks: Arc<Mutex<HashSet<String>>>,
+    /// Per-task run token, bumped whenever a task is (re)claimed or resumed.
+    /// A finishing thread only writes a terminal status if its token is still
+    /// current, so a stale thread cannot clobber a newer run's state.
+    generations: Arc<Mutex<HashMap<String, u64>>>,
     worker_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
@@ -78,8 +116,17 @@ impl BatchQueue {
             concurrency: Arc::new(AtomicU32::new(concurrency)),
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
             paused_tasks: Arc::new(Mutex::new(HashSet::new())),
+            generations: Arc::new(Mutex::new(HashMap::new())),
             worker_handle: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Bump and return the run token for `task_id`.
+    async fn next_generation(&self, task_id: &str) -> u64 {
+        let mut g = self.generations.lock().await;
+        let e = g.entry(task_id.to_string()).or_insert(0);
+        *e = e.wrapping_add(1);
+        *e
     }
 
     pub fn set_concurrency(&self, n: u32) {
@@ -98,11 +145,18 @@ impl BatchQueue {
         // Deduplicate: if an active task for the same source already exists,
         // reuse it instead of creating another identical one. This prevents a
         // single dropped file from producing a pile of duplicate tasks.
-        if let Ok(db) = crate::db::db(&app) {
-            if let Ok(Some(existing_id)) = db.find_active_batch_task_by_source(&source_path) {
-                emit_summary(&app);
-                return Ok(existing_id);
-            }
+        //
+        // The DB handle MUST be released before `emit_summary` runs: the global
+        // DB mutex is a non-reentrant `std::sync::Mutex`, and `emit_summary`
+        // re-acquires it. Holding the guard here would self-deadlock the thread
+        // (and then freeze every other DB command, i.e. the whole UI).
+        let existing_id = match crate::db::db(&app) {
+            Ok(db) => db.find_active_batch_task_by_source(&source_path).ok().flatten(),
+            Err(_) => None,
+        };
+        if let Some(existing_id) = existing_id {
+            emit_summary(&app);
+            return Ok(existing_id);
         }
 
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
@@ -127,7 +181,8 @@ impl BatchQueue {
         let active_tasks = self.active_tasks.clone();
         let running = self.running.clone();
         let concurrency = self.concurrency.clone();
-let paused_tasks = self.paused_tasks.clone();
+        let paused_tasks = self.paused_tasks.clone();
+        let generations = self.generations.clone();
 
         let worker = move || {
             rt.block_on(async {
@@ -177,6 +232,14 @@ let active = active_tasks.lock().await.len();
                         update_status(&app, &tid, "Processing", None, 0);
                         let cancellation = Arc::new(Cancellation::new());
                         active_tasks.lock().await.insert(tid.clone(), cancellation.clone());
+                        // Token for this run; a stale thread whose token no
+                        // longer matches will not overwrite terminal state.
+                        let generation = {
+                            let mut g = generations.lock().await;
+                            let e = g.entry(tid.clone()).or_insert(0);
+                            *e = e.wrapping_add(1);
+                            *e
+                        };
                         let _ = app.emit("batch-status", BatchStatusEvent {
                             task_id: tid.clone(),
                             status: "Processing".to_string(),
@@ -188,6 +251,7 @@ let active = active_tasks.lock().await.len();
                         let app = app.clone();
                         let active = active_tasks.clone();
                         let paused_tasks = paused_tasks.clone();
+                        let generations = generations.clone();
                         let rt = rt.clone();
 
                         std::thread::spawn(move || {
@@ -220,39 +284,63 @@ let active = active_tasks.lock().await.len();
 
                             let created_at = task_dto.created_at;
 
-                            let result = rt.block_on(engine.convert(&conv_task, Some(progress_cb), Some(&cancellation)));
+                            // Frees the concurrency slot on scope exit even if the
+                            // engine panics (see `ActiveTaskGuard`).
+                            let _active_guard = ActiveTaskGuard {
+                                task_id: tid.clone(),
+                                cancellation: cancellation.clone(),
+                                active_tasks: active.clone(),
+                                rt: rt.clone(),
+                            };
 
-                            rt.block_on(async {
-                                active.lock().await.remove(&tid);
+                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                rt.block_on(engine.convert(&conv_task, Some(progress_cb), Some(&cancellation)))
+                            }))
+                            .unwrap_or_else(|_| {
+                                Err(ConversionError {
+                                    code: ErrorCode::EngineError,
+                                    message: "转换线程异常退出（引擎内部错误）".to_string(),
+                                    stage: ConversionStage::Parsing,
+                                    retryable: true,
+                                    page: None,
+                                })
                             });
 
                             let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
                             let elapsed = now.saturating_sub(created_at);
 
-                            match &result {
-                                Ok(_) => {
-                                    update_status(&app, &tid, "Completed", None, elapsed);
-                                    let _ = app.emit("batch-status", BatchStatusEvent {
-                                        task_id: tid.clone(), status: "Completed".to_string(), error: None, elapsed_secs: elapsed,
-                                    });
-                                }
-                                Err(e) => {
-                                    let status = if cancellation.cancelled() {
-                                        // If the task was paused (cooperative
-                                        // cancel + DB already set to Paused),
-                                        // keep it Paused instead of overwriting
-                                        // with Cancelled.
-                                        let is_paused = rt.block_on(async {
-                                            paused_tasks.lock().await.remove(&tid)
+                            // A stale run (its task was resumed and re-claimed)
+                            // must not clobber the newer run's state.
+                            let is_current = rt.block_on(async {
+                                generations.lock().await.get(&tid).copied() == Some(generation)
+                            });
+
+                            if is_current {
+                                match &result {
+                                    Ok(_) => {
+                                        update_status(&app, &tid, "Completed", None, elapsed);
+                                        let _ = app.emit("batch-status", BatchStatusEvent {
+                                            task_id: tid.clone(), status: "Completed".to_string(), error: None, elapsed_secs: elapsed,
                                         });
-                                        if is_paused { "Paused" } else { "Cancelled" }
-                                    } else {
-                                        "Failed"
-                                    };
-                                    update_status(&app, &tid, status, Some(&e.message), elapsed);
-                                    let _ = app.emit("batch-status", BatchStatusEvent {
-                                        task_id: tid, status: status.to_string(), error: Some(e.message.clone()), elapsed_secs: elapsed,
-                                    });
+                                    }
+                                    Err(e) => {
+                                        let status = if cancellation.cancelled() {
+                                            // If the task was paused (cooperative
+                                            // cancel + DB already set to Paused),
+                                            // keep it Paused instead of overwriting
+                                            // with Cancelled.
+                                            let is_paused = rt.block_on(async {
+                                                paused_tasks.lock().await.remove(&tid)
+                                            });
+                                            if is_paused { "Paused" } else { "Cancelled" }
+                                        } else {
+                                            "Failed"
+                                        };
+                                        update_status(&app, &tid, status, Some(&e.message), elapsed);
+                                        let _ = app.emit("batch-status", BatchStatusEvent {
+                                            task_id: tid.clone(), status: status.to_string(), error: Some(e.message.clone()), elapsed_secs: elapsed,
+                                        });
+                                    }
                                 }
                             }
                             emit_summary(&app);
@@ -297,6 +385,9 @@ let active = active_tasks.lock().await.len();
         task_id: &str,
     ) -> Result<(), String> {
         self.paused_tasks.lock().await.remove(task_id);
+        // Invalidate any still-running thread for this task so it cannot write
+        // a terminal status over the fresh run we are about to enqueue.
+        self.next_generation(task_id).await;
 
         update_status(app, task_id, "Pending", None, 0);
         let _ = app.emit("batch-status", BatchStatusEvent {

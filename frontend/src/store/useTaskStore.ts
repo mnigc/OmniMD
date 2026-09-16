@@ -35,7 +35,6 @@ interface TaskStore {
   previewSource: "live" | "history" | null;
 
   addToHistory: (entry: HistoryEntry) => void;
-  loadHistory: () => void;
   clearHistoryItem: (id: string) => void;
   clearAllHistory: () => void;
   setCurrentTask: (
@@ -53,13 +52,13 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
   addToHistory: (entry) => {
     set((state) => {
-      const history = [entry, ...state.history];
+      // Deduplicate by id: a task may emit several terminal events, and the
+      // same task must not appear in history more than once.
+      const history = [entry, ...state.history.filter((e) => e.id !== entry.id)];
       persistHistory(history);
       return { history };
     });
   },
-
-  loadHistory: () => set({ history: loadHistory() }),
 
   clearHistoryItem: (id) => {
     const state = get();

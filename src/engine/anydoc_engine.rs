@@ -11,6 +11,11 @@ use crate::models::task::{
     ConversionTask, ErrorCode, ProgressCallback,
 };
 
+/// Serializes output-path allocation and writes across concurrent conversions.
+/// Output naming is check-then-act, so without this two conversions of files
+/// with the same stem could resolve to the same path.
+static OUTPUT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Local document-to-Markdown engine backed by [anydoc](https://github.com/firecrawl/anydoc),
 /// a pure-Rust converter with no ML models and no external services.
 ///
@@ -291,7 +296,9 @@ impl DocumentEngine for AnyDocEngine {
         let markdown = markdown_pipeline::process(&markdown);
 
         let stats = ConversionStats {
-            image_count: inline_refs.len(),
+            // Actual assets written to disk (not the number of inline refs,
+            // which could double-count or miss unreferenced assets).
+            image_count: written.len(),
             table_count: markdown_pipeline::count_table_separators(&markdown),
             word_count: markdown_pipeline::count_words(&markdown),
         };
@@ -307,28 +314,37 @@ impl DocumentEngine for AnyDocEngine {
             .to_string_lossy()
             .to_string();
         let has_assets = !written.is_empty();
-        let (md_path, asset_dir) =
-            file_utils::get_output_path_with_assets(&task.source_path, &out_dir, has_assets);
 
-        if let (Some(dir), true) = (&asset_dir, has_assets) {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| conv_error(ErrorCode::IoError, format!("创建图片目录失败: {e}")))?;
-            for w in &written {
-                std::fs::write(dir.join(&w.file_name), &w.asset.bytes).map_err(|e| {
-                    conv_error(
-                        ErrorCode::IoError,
-                        format!("写入图片 {} 失败: {e}", w.file_name),
-                    )
-                })?;
+        // `get_output_path_with_assets` is check-then-act (TOCTOU): two parallel
+        // conversions of the same stem could otherwise pick the same target and
+        // clobber each other. Serialize only the fast path-allocation + write
+        // phase (parsing above is not under this lock).
+        let md_path = {
+            let _guard = OUTPUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let (md_path, asset_dir) =
+                file_utils::get_output_path_with_assets(&task.source_path, &out_dir, has_assets);
+
+            if let (Some(dir), true) = (&asset_dir, has_assets) {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| conv_error(ErrorCode::IoError, format!("创建图片目录失败: {e}")))?;
+                for w in &written {
+                    std::fs::write(dir.join(&w.file_name), &w.asset.bytes).map_err(|e| {
+                        conv_error(
+                            ErrorCode::IoError,
+                            format!("写入图片 {} 失败: {e}", w.file_name),
+                        )
+                    })?;
+                }
             }
-        }
 
-        if let Some(parent) = md_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| conv_error(ErrorCode::IoError, format!("创建输出目录失败: {e}")))?;
-        }
-        std::fs::write(&md_path, &markdown)
-            .map_err(|e| conv_error(ErrorCode::IoError, format!("写入 Markdown 失败: {e}")))?;
+            if let Some(parent) = md_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| conv_error(ErrorCode::IoError, format!("创建输出目录失败: {e}")))?;
+            }
+            std::fs::write(&md_path, &markdown)
+                .map_err(|e| conv_error(ErrorCode::IoError, format!("写入 Markdown 失败: {e}")))?;
+            md_path
+        };
 
         report(1.0, "转换完成");
 

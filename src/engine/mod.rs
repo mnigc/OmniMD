@@ -1,6 +1,5 @@
 pub mod anydoc_engine;
 pub mod batch_queue;
-pub mod model_manager;
 
 use crate::models::task::{Cancellation, ProgressCallback, ConversionError, ConversionResult, ConversionTask};
 

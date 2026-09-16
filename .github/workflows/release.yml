@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create the release as a draft instead of publishing it'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+            bundles: 'app,dmg'
+          - platform: ubuntu-22.04
+            args: ''
+            bundles: 'deb,appimage,rpm'
+          - platform: windows-latest
+            args: ''
+            bundles: 'nsis'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Fail fast: `base64::STANDARD` (used by tauri-cli to decode the key)
+      # rejects whitespace, so a trailing newline from copy-paste silently
+      # breaks the signing step minutes into the build.
+      - name: Verify updater signing key
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error title=Missing repository secret::TAURI_SIGNING_PRIVATE_KEY is not set. Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          if [ "$SIGNING_KEY" != "$(printf '%s' "$SIGNING_KEY" | tr -d '[:space:]')" ]; then
+            echo "::error title=Malformed repository secret::TAURI_SIGNING_PRIVATE_KEY contains whitespace or newlines, which breaks base64 decoding. Re-paste the exact contents of ~/.tauri/omnid.key (single line, 348 characters)."
+            exit 1
+          fi
+          echo "Updater signing key looks well-formed (${#SIGNING_KEY} characters)."
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            rpm
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir frontend install --frozen-lockfile
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # minisign key for the in-app updater. Required: `bundle
+          # .createUpdaterArtifacts` is enabled, so the build fails without it.
+          # Generate with: pnpm tauri signer generate -w ~/.tauri/omnid.key
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # Tag push  -> release for the pushed tag.
+          # Manual run -> release for v<version in tauri.conf.json>, so bump the
+          # version before clicking Run workflow.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: 'OmniMD v__VERSION__'
+          releaseBody: 'Download the installer for your platform from the assets below.'
+          # Published by default: the in-app updater reads
+          # releases/latest/download/latest.json, which ignores drafts.
+          releaseDraft: ${{ inputs.draft == true }}
+          prerelease: false
+          uploadWorkflowArtifacts: true
+          # Windows updates are based on the NSIS setup.exe, so prefer its
+          # signature in the generated latest.json.
+          updaterJsonPreferNsis: true
+          args: '${{ matrix.args }} --bundles ${{ matrix.bundles }}'

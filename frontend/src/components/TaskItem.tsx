@@ -5,7 +5,7 @@
   Play,
   Trash2,
 } from "lucide-react";
-import type { ConversionTask } from "../types";
+import type { TaskStatus } from "../types";
 import { useI18n } from "../i18n";
 import { cn } from "../lib/utils";
 import { Badge } from "./ui/badge";
@@ -18,8 +18,18 @@ import {
 } from "./ui/tooltip";
 import { Spinner } from "./ui/spinner";
 
+/** Minimal shape TaskItem needs, satisfied by both ConversionTask and
+ *  BatchTaskDto (so callers never need an `as any` cast). */
+export interface TaskLike {
+  id: string;
+  sourcePath: string;
+  status: TaskStatus;
+  progress: number;
+  error: string | null;
+}
+
 interface TaskItemProps {
-  task: ConversionTask;
+  task: TaskLike;
   compact?: boolean;
   showActions?: boolean;
   onStart?: (taskId: string) => void;
@@ -31,6 +41,7 @@ interface TaskItemProps {
 const statusKey: Record<string, string> = {
   Pending: "taskStatus.pending",
   Processing: "taskStatus.processing",
+  Paused: "taskStatus.paused",
   Completed: "taskStatus.completed",
   Failed: "taskStatus.failed",
   Cancelled: "taskStatus.cancelled",
@@ -42,6 +53,7 @@ const statusBadgeVariant: Record<
 > = {
   Pending: "warning",
   Processing: "secondary",
+  Paused: "warning",
   Completed: "success",
   Failed: "destructive",
   Cancelled: "secondary",

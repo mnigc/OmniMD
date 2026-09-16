@@ -34,6 +34,10 @@ pub struct Document {
 pub struct Asset {
     pub name: String,
     pub extension: String,
+    /// Raw bytes are kept in memory for writing to disk but are never
+    /// serialized: inlining them turns each image into a huge JSON number
+    /// array when a `Document` is sent to the frontend.
+    #[serde(skip)]
     pub bytes: Vec<u8>,
     pub media_type: String,
 }

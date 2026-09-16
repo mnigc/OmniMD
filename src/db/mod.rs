@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use crate::models::task::{BatchTaskDto, BatchSummaryDto};
+use crate::text_utils::is_cjk;
 
 // ---------------------------------------------------------------------------
 // DTOs (serialized to the frontend, camelCase)
@@ -141,6 +142,8 @@ CREATE TABLE IF NOT EXISTS batch_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_batch_tasks_status ON batch_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_batch_tasks_created ON batch_tasks(created_at);
+-- Speeds up the enqueue dedup lookup (source_path + status).
+CREATE INDEX IF NOT EXISTS idx_batch_tasks_source_status ON batch_tasks(source_path, status);
 "#;
 
 pub struct WorkspaceDb {
@@ -330,7 +333,7 @@ impl WorkspaceDb {
     pub fn load_scan_baseline(
         &self,
         workspace_id: i64,
-    ) -> Result<(PathBuf, BTreeMap<String, (i64, i64)>), String> {
+    ) -> Result<(PathBuf, BTreeMap<String, (i64, i64, i64)>), String> {
         let Some(ws) = self.get_workspace(workspace_id)? else {
             return Err("工作区不存在".to_string());
         };
@@ -342,24 +345,37 @@ impl WorkspaceDb {
     pub fn apply_scan_plan(
         &self,
         workspace_id: i64,
-        existing: &BTreeMap<String, (i64, i64)>,
+        existing: &BTreeMap<String, (i64, i64, i64)>,
         plan: ScanPlan,
     ) -> Result<ScanResultDto, String> {
         let mut result = ScanResultDto::default();
         let tx = self.conn.unchecked_transaction().map_err(err)?;
 
         for u in &plan.updates {
-            tx.execute(
-                "UPDATE documents SET title = ?1, file_size = ?2, mtime = ?3, source = ?4
-                 WHERE id = ?5",
-                params![u.title, u.size, u.mtime, u.source, u.id],
-            )
-            .map_err(err)?;
-            tx.execute(
-                "UPDATE documents_fts SET title = ?1, body = ?2, tags = ?3 WHERE rowid = ?4",
-                params![u.title_bigram, u.body_bigram, u.tags_bigram, u.id],
-            )
-            .map_err(err)?;
+            if u.update_content {
+                tx.execute(
+                    "UPDATE documents SET title = ?1, file_size = ?2, mtime = ?3, source = ?4
+                     WHERE id = ?5",
+                    params![u.title, u.size, u.mtime, u.source, u.id],
+                )
+                .map_err(err)?;
+                // `INSERT OR REPLACE` also repairs a missing FTS row, so the
+                // index cannot silently drift out of sync with `documents`.
+                tx.execute(
+                    "INSERT OR REPLACE INTO documents_fts (rowid, title, body, tags)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![u.id, u.title_bigram, u.body_bigram, u.tags_bigram],
+                )
+                .map_err(err)?;
+            } else {
+                // Oversized file: refresh only cheap metadata and leave the
+                // existing title/source and full-text index untouched.
+                tx.execute(
+                    "UPDATE documents SET file_size = ?1, mtime = ?2 WHERE id = ?3",
+                    params![u.size, u.mtime, u.id],
+                )
+                .map_err(err)?;
+            }
             result.updated += 1;
         }
 
@@ -402,14 +418,17 @@ impl WorkspaceDb {
         Ok(result)
     }
 
-    fn indexed_docs(&self, workspace_id: i64) -> Result<BTreeMap<String, (i64, i64)>, String> {
+    fn indexed_docs(&self, workspace_id: i64) -> Result<BTreeMap<String, (i64, i64, i64)>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, path, mtime FROM documents WHERE workspace_id = ?1")
+            .prepare("SELECT id, path, mtime, file_size FROM documents WHERE workspace_id = ?1")
             .map_err(err)?;
         let rows = stmt
             .query_map(params![workspace_id], |r| {
-                Ok((r.get::<_, String>(1)?, (r.get::<_, i64>(0)?, r.get::<_, i64>(2)?)))
+                Ok((
+                    r.get::<_, String>(1)?,
+                    (r.get::<_, i64>(0)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?),
+                ))
             })
             .map_err(err)?
             .collect::<Result<BTreeMap<_, _>, _>>()
@@ -451,11 +470,6 @@ impl WorkspaceDb {
     ) -> Result<Vec<FolderDto>, String> {
         let root = self.workspace_root(workspace_id)?;
         let target = normalize_folder(folder);
-        let base = if target.is_empty() {
-            PathBuf::from(&root)
-        } else {
-            PathBuf::from(&root).join(&target)
-        };
         let mut counts: BTreeMap<String, i64> = BTreeMap::new();
         // Prefix identifying "any file under `target`", e.g. "" (root) or "sub/".
         let prefix = if target.is_empty() {
@@ -470,15 +484,18 @@ impl WorkspaceDb {
             if !prefix.is_empty() && !rel.starts_with(&prefix) {
                 continue;
             }
-            // First path segment *after* the target folder; only real
-            // directories count as subfolders (not direct files).
+            // First path segment *after* the target folder. Only a *nested*
+            // path segment denotes a subfolder; a single-segment remainder is a
+            // file directly inside `target`. Deriving this from the indexed
+            // path avoids a filesystem `is_dir()` probe per document (which
+            // would otherwise block the global DB lock).
             let rest = if prefix.is_empty() {
                 rel.as_str()
             } else {
                 &rel[prefix.len()..]
             };
-            if let Some(first) = rest.split('/').next().filter(|s| !s.is_empty()) {
-                if base.join(first).is_dir() {
+            if let Some((first, tail)) = rest.split_once('/') {
+                if !first.is_empty() && !tail.is_empty() {
                     *counts.entry(first.to_string()).or_insert(0) += 1;
                 }
             }
@@ -498,11 +515,23 @@ impl WorkspaceDb {
     }
 
     pub fn list_favorites(&self, workspace_id: i64) -> Result<Vec<DocumentDto>, String> {
-        self.all_docs(workspace_id)?
-            .into_iter()
-            .filter(|d| d.favorite)
-            .collect::<Vec<_>>()
-            .pipe(Ok)
+        // Filter in SQL so `idx_documents_favorite` is actually used instead of
+        // loading every document and filtering in memory.
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, workspace_id, path, title, file_size, favorite, source, created_at, opened_at
+                 FROM documents
+                 WHERE workspace_id = ?1 AND favorite = 1
+                 ORDER BY title COLLATE NOCASE",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(params![workspace_id], row_to_document)
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        Ok(rows)
     }
 
     pub fn list_recent(&self, workspace_id: Option<i64>, limit: i64) -> Result<Vec<DocumentDto>, String> {
@@ -585,7 +614,7 @@ impl WorkspaceDb {
             .prepare(
                 "SELECT d.id, d.workspace_id, d.path, d.title, d.file_size,
                         d.favorite, d.source, d.created_at, d.opened_at,
-                        snippet(documents_fts, -1, '<mark>', '</mark>', '…', 24)
+                        snippet(documents_fts, -1, ?4, ?5, '…', 24)
                  FROM documents_fts
                  JOIN documents d ON d.id = documents_fts.rowid
                  WHERE documents_fts MATCH ?1 AND d.workspace_id = ?2
@@ -593,8 +622,14 @@ impl WorkspaceDb {
                  LIMIT ?3",
             )
             .map_err(err)?;
+        // Sentinel markers instead of literal `<mark>` so the snippet text can
+        // be HTML-escaped first, then have the markers restored. This keeps the
+        // frontend's `dangerouslySetInnerHTML` from ever receiving raw document
+        // HTML.
         let rows = stmt
-            .query_map(params![match_expr, workspace_id, limit], |r| {
+            .query_map(
+                params![match_expr, workspace_id, limit, MARK_OPEN, MARK_CLOSE],
+                |r| {
                 let doc = DocumentDto {
                     id: r.get(0)?,
                     workspace_id: r.get(1)?,
@@ -609,7 +644,7 @@ impl WorkspaceDb {
                 let raw: String = r.get(9)?;
                 Ok(SearchHitDto {
                     document: doc,
-                    snippet: Some(clean_cjk_spaces(&raw)),
+                    snippet: Some(escape_snippet(&raw)),
                 })
             })
             .map_err(err)?
@@ -757,67 +792,39 @@ impl WorkspaceDb {
     }
 
     pub fn get_batch_summary(&self) -> Result<BatchSummaryDto, String> {
-        let total: i64 = self
+        // One grouped scan instead of seven full-table COUNTs.
+        let mut stmt = self
             .conn
-            .query_row("SELECT COUNT(*) FROM batch_tasks", [], |r| r.get(0))
+            .prepare("SELECT status, COUNT(*) FROM batch_tasks GROUP BY status")
             .map_err(err)?;
-        let pending: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Pending'",
-                [],
-                |r| r.get(0),
-            )
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
-        let processing: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Processing'",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(err)?;
-        let completed: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Completed'",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(err)?;
-        let failed: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Failed'",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(err)?;
-        let cancelled: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Cancelled'",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(err)?;
-        let paused: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM batch_tasks WHERE status = 'Paused'",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(err)?;
-        Ok(BatchSummaryDto {
-            total: total as u64,
-            pending: pending as u64,
-            processing: processing as u64,
-            completed: completed as u64,
-            failed: failed as u64,
-            cancelled: cancelled as u64,
-            paused: paused as u64,
-        })
+        let mut summary = BatchSummaryDto {
+            total: 0,
+            pending: 0,
+            processing: 0,
+            completed: 0,
+            failed: 0,
+            cancelled: 0,
+            paused: 0,
+        };
+        for (status, count) in rows {
+            let count = count as u64;
+            summary.total += count;
+            match status.as_str() {
+                "Pending" => summary.pending = count,
+                "Processing" => summary.processing = count,
+                "Completed" => summary.completed = count,
+                "Failed" => summary.failed = count,
+                "Cancelled" => summary.cancelled = count,
+                "Paused" => summary.paused = count,
+                _ => {}
+            }
+        }
+        Ok(summary)
     }
 
     pub fn get_batch_task_created_at(&self, id: &str) -> Result<Option<u64>, String> {
@@ -905,13 +912,6 @@ fn row_to_document(r: &rusqlite::Row) -> rusqlite::Result<DocumentDto> {
     })
 }
 
-trait Pipe: Sized {
-    fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
-        f(self)
-    }
-}
-impl<T> Pipe for T {}
-
 fn now_rfc3339() -> String {
     Local::now().to_rfc3339()
 }
@@ -974,7 +974,7 @@ fn parent_of_rel(path: &str, root: &str) -> String {
 }
 
 fn normalize_folder(folder: Option<&str>) -> String {
-    folder
+    let raw = folder
         .map(|f| {
             f.trim()
                 .trim_start_matches("./")
@@ -982,7 +982,13 @@ fn normalize_folder(folder: Option<&str>) -> String {
                 .trim_end_matches('/')
                 .to_string()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Reject parent-directory escapes: a folder fragment must stay inside the
+    // workspace root (this value is later joined to the root for a dir probe).
+    if raw.split('/').any(|seg| seg == "..") || raw.contains('\\') {
+        return String::new();
+    }
+    raw
 }
 
 /// Recursively collect every `*.md` file, skipping dot-directories.
@@ -1068,6 +1074,10 @@ struct ScanUpdate {
     title_bigram: String,
     body_bigram: String,
     tags_bigram: String,
+    /// When false only `file_size`/`mtime` are refreshed; title, source and
+    /// the FTS row are preserved. Used for oversized files so their existing
+    /// full-text index is not wiped.
+    update_content: bool,
 }
 
 struct ScanInsert {
@@ -1086,7 +1096,7 @@ struct ScanInsert {
 /// content + bigram tokenization) and must never starve other commands.
 fn build_scan_plan(
     root: &Path,
-    existing: &BTreeMap<String, (i64, i64)>,
+    existing: &BTreeMap<String, (i64, i64, i64)>,
     mut on_progress: impl FnMut(usize),
 ) -> Result<ScanPlan, String> {
     let mut files = Vec::new();
@@ -1103,27 +1113,49 @@ fn build_scan_plan(
         let mtime = mtime_ns(&meta);
         let size = meta.len() as i64;
 
-        if let Some(&(id, old_mtime)) = existing.get(&normalized) {
-            if old_mtime == mtime {
+        if let Some(&(id, old_mtime, old_size)) = existing.get(&normalized) {
+            // Compare size as well as mtime: coarse-timestamp filesystems (FAT,
+            // network shares) or mtime-preserving rewrites would otherwise be
+            // missed, and a size-only change is always a content change.
+            if old_mtime == mtime && old_size == size {
                 continue;
             }
-            // Oversized files keep their old body; only name-level metadata
-            // is refreshed.
+            // Oversized files: refresh only size/mtime and KEEP the existing
+            // title/source and full-text index. Writing empty bigrams here (as
+            // before) permanently wiped their searchability.
             if size as u64 > SCAN_MAX_BODY_BYTES {
-                let title = file_stem_title(file);
                 plan.updates.push(ScanUpdate {
                     id,
-                    title,
+                    title: String::new(),
                     size,
                     mtime,
                     source: None,
                     title_bigram: String::new(),
                     body_bigram: String::new(),
                     tags_bigram: String::new(),
+                    update_content: false,
                 });
                 continue;
             }
-            let Ok(content) = std::fs::read_to_string(file) else { continue };
+            let content = match std::fs::read_to_string(file) {
+                Ok(c) => c,
+                Err(_) => {
+                    // Unreadable / non-UTF8 (e.g. GBK): refresh size+mtime only
+                    // and keep whatever index already exists for this file.
+                    plan.updates.push(ScanUpdate {
+                        id,
+                        title: String::new(),
+                        size,
+                        mtime,
+                        source: None,
+                        title_bigram: String::new(),
+                        body_bigram: String::new(),
+                        tags_bigram: String::new(),
+                        update_content: false,
+                    });
+                    continue;
+                }
+            };
             let (title, source, tags, body) = extract_meta(&content, file);
             let title_bigram = cjk_bigram(&title);
             let body_bigram = cjk_bigram(&body);
@@ -1137,6 +1169,7 @@ fn build_scan_plan(
                 title_bigram,
                 body_bigram,
                 tags_bigram,
+                update_content: true,
             });
         } else {
             // Oversized new files: index by filename so they are still
@@ -1146,7 +1179,9 @@ fn build_scan_plan(
             } else {
                 match std::fs::read_to_string(file) {
                     Ok(c) => extract_meta(&c, file),
-                    Err(_) => continue,
+                    // Non-UTF8 / unreadable: still index by filename so the
+                    // file remains listed and browsable.
+                    Err(_) => (file_stem_title(file), None, Vec::new(), String::new()),
                 }
             };
             let title_bigram = cjk_bigram(&title);
@@ -1167,7 +1202,7 @@ fn build_scan_plan(
 
     // Removals are judged against the disk (not this walk), so a capped walk
     // never deletes records it simply did not reach.
-    for (normalized, (id, _)) in existing {
+    for (normalized, (id, _, _)) in existing {
         if !Path::new(normalized).exists() {
             plan.removals.push(*id);
         }
@@ -1304,19 +1339,6 @@ fn strip_frontmatter(content: &str) -> &str {
 // CJK bigram tokenization for FTS5
 // ---------------------------------------------------------------------------
 
-fn is_cjk(c: char) -> bool {
-    matches!(c,
-        '\u{3400}'..='\u{4DBF}' | // Extension A
-        '\u{4E00}'..='\u{9FFF}' | // Unified Ideographs
-        '\u{F900}'..='\u{FAFF}' | // Compatibility Ideographs
-        '\u{20000}'..='\u{2A6DF}' | // Extension B
-        '\u{2F800}'..='\u{2FA1F}' | // Compatibility Supplement
-        '\u{3040}'..='\u{30FF}' | // Hiragana + Katakana
-        '\u{31F0}'..='\u{31FF}' | // Katakana Phonetic Ext.
-        '\u{AC00}'..='\u{D7AF}'   // Hangul syllables
-    )
-}
-
 /// Emit CJK bigrams (adjacent character pairs) for a continuous CJK run.
 fn flush_cjk(buf: &mut Vec<char>, tokens: &mut Vec<String>) {
     if buf.len() >= 2 {
@@ -1366,6 +1388,24 @@ fn query_tokens(query: &str) -> Vec<String> {
         .filter(|t| t.chars().any(is_cjk) || t.chars().count() >= 2)
         .map(|s| s.to_string())
         .collect()
+}
+
+/// Sentinel markers used inside FTS5 snippets; replaced with `<mark>` tags
+/// after the surrounding text has been HTML-escaped.
+const MARK_OPEN: &str = "\u{1}";
+const MARK_CLOSE: &str = "\u{2}";
+
+/// HTML-escape a raw FTS5 snippet and then restore the highlight markers, so
+/// the result is safe to inject with `dangerouslySetInnerHTML`.
+fn escape_snippet(raw: &str) -> String {
+    let escaped = raw
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;");
+    clean_cjk_spaces(&escaped)
+        .replace(MARK_OPEN, "<mark>")
+        .replace(MARK_CLOSE, "</mark>")
 }
 
 /// Remove spaces inserted between adjacent CJK characters in FTS5 snippets.

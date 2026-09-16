@@ -10,7 +10,7 @@
 
 PDF、Word、Excel、PowerPoint、EPUB、HTMLなど、さまざまなドキュメントをクリーンなMarkdownに変換するクロスプラットフォーム・デスクトップアプリケーションです。
 
-**Tauri 2** + **Rust** + **React** で構築され、コア変換エンジンは [MinerU](https://github.com/opendatalab/MinerU) 3.x が提供します。
+**Tauri 2** + **Rust** + **React** で構築され、コア変換エンジンは [AnyDoc](https://github.com/firecrawl/anydoc)（ローカルな純 Rust エンジン、ML モデル不要・ネットワーク不要）が提供します。
 
 </div>
 
@@ -30,13 +30,15 @@ PDF、Word、Excel、PowerPoint、EPUB、HTMLなど、さまざまなドキュ�
 
 > TODO: スクリーンショット追加
 
-アプリは3つのメインページで構成されます：
+アプリは以下のメインページで構成されます：
 
 | ページ | 用途 |
 |--------|------|
-| **Home** | ファイルブラウジングとクイックアクセス |
-| **Convert** | 単一ファイル変換、出力プレビュー |
-| **Batch** | バッチ変換、並行制御と進捗トラッキング |
+| **Home** | ファイル/フォルダのドロップ、並行数・出力先の設定、変換キューの追跡 |
+| **Library** | ワークスペース、ドキュメント、全文検索、お気に入り、最近、プレビュー/編集 |
+| **History** | 完了/失敗/キャンセルされたすべての変換 |
+| **Preview** | ソース / プレビュー / 分割表示 |
+| **Settings** | テーマ、言語、既定の出力先 |
 
 ## 🚀 クイックスタート
 
@@ -56,14 +58,11 @@ PDF、Word、Excel、PowerPoint、EPUB、HTMLなど、さまざまなドキュ�
 git clone https://github.com/<your-org>/OmniMD.git
 cd OmniMD
 
-# 2. フロントエンド依存関係をインストール
-cd frontend
+# 2. ルート依存（Tauri CLI）とフロントエンド依存をインストール
 pnpm install
+cd frontend && pnpm install
 
-# 3. Tauri CLI を追加（初回のみ）
-pnpm add -D @tauri-apps/cli
-
-# 4. 開発モードを起動（Rust バックエンド コンパイル + フロントエンド ホットリロード）
+# 3. 開発モードを起動（Rust バックエンド コンパイル + フロントエンド ホットリロード）
 pnpm tauri dev
 ```
 
@@ -72,11 +71,10 @@ pnpm tauri dev
 ## 📦 リリースビルド
 
 ```bash
-cd frontend
 pnpm tauri build
 ```
 
-成果物は `frontend/src-tauri/target/release/bundle/` に配置されます（Windows では `.msi` / `.exe` インストーラー）。
+成果物は `target/release/bundle/` に配置されます（Windows では `.msi` インストーラー）。
 
 ## 🏗️ プロジェクト構成
 
@@ -85,19 +83,20 @@ OmniMD/
 ├── src/                    # Rust バックエンド
 │   ├── main.rs             # エントリポイント
 │   ├── lib.rs              # Tauri コマンド登録（フロントエンド API）
-│   ├── pipeline.rs         # 変換パイプライン（読込 → 変換 → 書出）
+│   ├── markdown_pipeline.rs# 後処理（見出し/リスト正規化、クリーニング、統計）
 │   ├── file_utils.rs       # パスヘルパー / フォーマットホワイトリスト
-│   ├── engine/           # MinerU エンジン統合 (HTTP client + ランタイム管理)
+│   ├── db/                 # SQLite ワークスペース層（メタデータ + FTS5 検索）
+│   ├── engine/             # DocumentEngine trait + AnyDoc 実装 + バッチキュー
 │   └── models/             # Document / Task / Asset データ構造
 ├── frontend/               # React + TypeScript フロントエンド
 │   ├── src/
 │   │   ├── App.tsx         # アプリのシェルとナビゲーション
-│   │   ├── pages/          # Home / Convert / Batch ページ
+│   │   ├── pages/          # Home / Library / History / Preview / Settings
 │   │   ├── api/            # Rust バックエンド invoke ラッパー
 │   │   ├── store/          # zustand 状態管理
 │   │   ├── components/     # 再利用コンポーネント
 │   │   └── types/          # 共有型定義
-│   └── vite.config.ts      # Vite 設定（ポート 1420）
+│   └── vite.config.ts      # Vite 設定（ポート 1421）
 ├── tauri.conf.json         # Tauri アプリ設定
 ├── capabilities/           # Tauri 権限設定
 ├── Cargo.toml              # Rust 依存関係
@@ -148,10 +147,12 @@ TODO: LICENSE ファイルを追加（MIT または Apache-2.0 を推奨）。
 
 ## 🗺️ ロードマップ
 
-- [x] Phase 1 MVP — 単一ファイル / バッチ変換、MinerU エンジン統合
-- [ ] Settings ページ（出力フォーマット、並行数、OCR トグル）
-- [ ] OCR 画像テキスト認識（モデル構造は `src/models/ocr.rs` に予約済み）
-- [ ] ドラッグ＆ドロップのフォルダ再帰変換
+- [x] 単一ファイル / バッチ変換（ローカル純 Rust エンジン）
+- [x] ライブラリ（ワークスペース、全文検索、お気に入り、最近）
+- [x] プレビュー / 編集（オートセーブ）
+- [x] 変換履歴
+- [x] テーマ（ライト / ダーク / システム）と言語（zh / en）切替
+- [ ] Windows シェル右クリックメニュー連携
 - [ ] クロスプラットフォームビルド（macOS / Linux）
 
 ## 📖 追加ドキュメント

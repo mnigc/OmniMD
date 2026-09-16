@@ -3,6 +3,52 @@
 //! Stages: Normalize → Cleanup. Each stage takes a markdown string and
 //! returns a cleaned/transformed one.
 
+use crate::text_utils::is_cjk;
+
+/// Detect a code-fence line and return its marker character (`` ` `` or `~`).
+/// A fence is three or more consecutive identical marker characters.
+fn fence_marker(line: &str) -> Option<char> {
+    let trimmed = line.trim_start();
+    let marker = trimmed.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let count = trimmed.chars().take_while(|c| *c == marker).count();
+    (count >= 3).then_some(marker)
+}
+
+/// Tracks fenced-code-block state while iterating lines, correctly handling
+/// both ``` and ~~~ fences (and not toggling on a different marker inside a
+/// block). `consume` returns true when a line must be treated as code content
+/// (fence lines included).
+struct CodeFenceState {
+    open: Option<char>,
+}
+
+impl CodeFenceState {
+    fn new() -> Self {
+        Self { open: None }
+    }
+
+    fn consume(&mut self, line: &str) -> bool {
+        if let Some(marker) = fence_marker(line) {
+            match self.open {
+                None => {
+                    self.open = Some(marker);
+                    return true;
+                }
+                Some(open) if open == marker => {
+                    self.open = None;
+                    return true;
+                }
+                // A different fence marker inside a block is plain content.
+                _ => {}
+            }
+        }
+        self.open.is_some()
+    }
+}
+
 /// Full pipeline: normalize → cleanup.
 pub fn process(markdown: &str) -> String {
     let normalized = normalize(markdown);
@@ -13,13 +59,9 @@ pub fn process(markdown: &str) -> String {
 /// blocks. Used for statistics.
 pub fn count_table_separators(markdown: &str) -> usize {
     let mut count = 0;
-    let mut in_code_block = false;
+    let mut fence = CodeFenceState::new();
     for line in markdown.lines() {
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block {
+        if fence.consume(line) {
             continue;
         }
         if is_table_separator(line) {
@@ -33,13 +75,9 @@ pub fn count_table_separators(markdown: &str) -> usize {
 /// blocks. Used for statistics and to verify assets were bundled.
 pub fn count_images(markdown: &str) -> usize {
     let mut count = 0;
-    let mut in_code_block = false;
+    let mut fence = CodeFenceState::new();
     for line in markdown.lines() {
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block {
+        if fence.consume(line) {
             continue;
         }
         count += line.matches("![").count();
@@ -54,7 +92,7 @@ pub fn count_images(markdown: &str) -> usize {
 /// one word. This mirrors how word processors count CJK documents.
 pub fn count_words(markdown: &str) -> usize {
     let mut count = 0usize;
-    let mut in_code_block = false;
+    let mut fence = CodeFenceState::new();
     let mut in_inline_code = false;
     let mut buf = String::with_capacity(16);
 
@@ -66,11 +104,7 @@ pub fn count_words(markdown: &str) -> usize {
     };
 
     for line in markdown.lines() {
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block {
+        if fence.consume(line) {
             continue;
         }
         let mut chars = line.chars().peekable();
@@ -98,20 +132,6 @@ pub fn count_words(markdown: &str) -> usize {
     count
 }
 
-/// Whether a character belongs to a CJK script that should be counted
-/// per-character rather than per-whitespace-delimited word.
-fn is_cjk(c: char) -> bool {
-    matches!(c,
-        '\u{4E00}'..='\u{9FFF}'      // CJK Unified Ideographs
-        | '\u{3400}'..='\u{4DBF}'    // CJK Extension A
-        | '\u{F900}'..='\u{FAFF}'    // CJK Compatibility Ideographs
-        | '\u{3040}'..='\u{309F}'    // Hiragana
-        | '\u{30A0}'..='\u{30FF}'    // Katakana
-        | '\u{AC00}'..='\u{D7AF}'    // Hangul Syllables
-        | '\u{FF00}'..='\u{FFEF}'    // Fullwidth forms
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Stage 1: Normalize
 // ---------------------------------------------------------------------------
@@ -125,8 +145,14 @@ pub fn normalize(markdown: &str) -> String {
     let mut heading_remap: std::collections::HashMap<u8, u8> = std::collections::HashMap::new();
     let mut next_level: u8 = 0;
 
-    // First pass: build remap table by scanning headings in order.
+    // First pass: build remap table by scanning headings in order. Code fences
+    // must be skipped here too, otherwise a `###` inside a code block would
+    // consume a level and demote the real headings that follow it.
+    let mut fence = CodeFenceState::new();
     for line in &lines {
+        if fence.consume(line) {
+            continue;
+        }
         if let Some(level) = parse_heading_level(line) {
             if !heading_remap.contains_key(&level) {
                 next_level = (next_level + 1).min(6);
@@ -136,27 +162,24 @@ pub fn normalize(markdown: &str) -> String {
     }
 
     // Reset for second pass.
-    let mut in_code_block = false;
+    let mut fence = CodeFenceState::new();
 
     for line in &lines {
         // Track code fence state — don't touch content inside code blocks.
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
+        if fence.consume(line) {
             result.push_str(line);
             result.push('\n');
             continue;
         }
 
-        if in_code_block {
-            result.push_str(line);
-            result.push('\n');
-            continue;
-        }
-
-        // Remap heading levels.
+        // Remap heading levels. Preserve any leading indentation; slicing must
+        // start AFTER the indent, not at byte 0, or the `#` count doubles up.
         if let Some(level) = parse_heading_level(line) {
             let new_level = *heading_remap.get(&level).unwrap_or(&level);
-            let rest = &line[level as usize..];
+            let indent_len = line.len() - line.trim_start().len();
+            let indent = &line[..indent_len];
+            let rest = &line[indent_len + level as usize..];
+            result.push_str(indent);
             for _ in 0..new_level {
                 result.push('#');
             }
@@ -205,19 +228,11 @@ fn parse_heading_level(line: &str) -> Option<u8> {
 pub fn cleanup(markdown: &str) -> String {
     let mut result = String::with_capacity(markdown.len());
     let mut blank_count = 0;
-    let mut in_code_block = false;
+    let mut fence = CodeFenceState::new();
 
     for line in markdown.lines() {
         // Track code fence state.
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            blank_count = 0;
-            result.push_str(line);
-            result.push('\n');
-            continue;
-        }
-
-        if in_code_block {
+        if fence.consume(line) {
             blank_count = 0;
             result.push_str(line);
             result.push('\n');
@@ -354,6 +369,38 @@ mod tests {
         assert!(result.contains("### Section"));
         assert!(result.contains("#### Deep"));
         assert!(result.contains("#### Deep2"));
+    }
+
+    #[test]
+    fn normalize_ignores_headings_inside_code_blocks() {
+        // The `### x` inside the fence must NOT consume a level and demote the
+        // real H1/H2 that follow it.
+        let input = "```\n### x\n```\n# A\n## B";
+        let result = normalize(input);
+        assert!(result.contains("### x"), "code content changed: {result}");
+        assert!(result.contains("# A"), "H1 was demoted: {result}");
+        assert!(result.contains("## B"), "H2 was demoted: {result}");
+    }
+
+    #[test]
+    fn normalize_ignores_headings_in_tilde_fences() {
+        let input = "~~~\n### x\n~~~\n# A\n## B";
+        let result = normalize(input);
+        assert!(result.contains("### x"), "code content changed: {result}");
+        assert!(result.contains("# A"), "H1 was demoted: {result}");
+        assert!(result.contains("## B"), "H2 was demoted: {result}");
+    }
+
+    #[test]
+    fn normalize_preserves_indented_heading() {
+        // A leading indent must not cause the `#` count to double up. H1 is
+        // present so H2 stays H2 (the remap only collapses skipped levels).
+        let input = "# A\n  ## B";
+        let result = normalize(input);
+        assert!(
+            result.contains("  ## B"),
+            "indented heading was mangled: {result}"
+        );
     }
 
     #[test]

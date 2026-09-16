@@ -57,14 +57,10 @@ export interface TaskStatusDto {
   error: string | null;
 }
 
-export interface ConverterInfo {
-  name: string;
-  supportedFormats: string[];
-}
-
 export type TaskStatus =
   | "Pending"
   | "Processing"
+  | "Paused"
   | "Completed"
   | "Failed"
   | "Cancelled";
@@ -123,9 +119,9 @@ export interface BatchTaskDto {
   id: string;
   sourcePath: string;
   outputPath: string;
-  status: string;
+  status: TaskStatus;
   progress: number;
-  stage: string;
+  stage: ConversionStage;
   error: string | null;
   createdAt: number;
   completedAt: number | null;
@@ -146,14 +142,14 @@ export interface BatchSummaryDto {
 export interface BatchProgressEvent {
   taskId: string;
   progress: number;
-  stage: string;
+  stage: ConversionStage;
   elapsedSecs: number;
   detail?: string;
 }
 
 export interface BatchStatusEvent {
   taskId: string;
-  status: string;
+  status: TaskStatus;
   error: string | null;
   elapsedSecs: number;
 }

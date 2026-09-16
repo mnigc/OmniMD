@@ -8,10 +8,10 @@ const locales = {
 } as const;
 
 export type Locale = keyof typeof locales;
-type TranslationType = typeof zhCN;
+export type TranslationVars = Record<string, string | number>;
 
 interface I18nContextValue {
-  t: (path: string) => string;
+  t: (path: string, vars?: TranslationVars) => string;
   locale: Locale;
   setLocale: (locale: Locale) => void;
 }
@@ -25,21 +25,41 @@ function getNestedValue(obj: Record<string, unknown>, path: string): string {
     if (typeof current === "object" && current !== null && key in current) {
       current = (current as Record<string, unknown>)[key];
     } else {
+      if (import.meta.env.DEV) {
+        console.warn(`[i18n] missing translation key: ${path}`);
+      }
       return path;
     }
   }
   return typeof current === "string" ? current : path;
 }
 
+function interpolate(value: string, vars?: TranslationVars): string {
+  if (!vars) return value;
+  let out = value;
+  for (const [key, v] of Object.entries(vars)) {
+    out = out.split(`{${key}}`).join(String(v));
+  }
+  return out;
+}
+
+function readStoredLocale(): Locale {
+  try {
+    const saved = localStorage.getItem("omnimd_locale");
+    if (saved && saved in locales) return saved as Locale;
+  } catch {
+    // ignore
+  }
+  return "zh-CN";
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const saved = localStorage.getItem("omnimd_locale");
-  const [locale, setLocale] = useState<Locale>(
-    (saved as Locale) && locales[saved as Locale] ? (saved as Locale) : "zh-CN"
-  );
+  const [locale, setLocaleState] = useState<Locale>(readStoredLocale);
 
   const t = useMemo(
-    () => (path: string) => getNestedValue(locales[locale], path),
-    [locale]
+    () => (path: string, vars?: TranslationVars) =>
+      interpolate(getNestedValue(locales[locale], path), vars),
+    [locale],
   );
 
   const value = useMemo(
@@ -47,11 +67,15 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       t,
       locale,
       setLocale: (l: Locale) => {
-        setLocale(l);
-        localStorage.setItem("omnimd_locale", l);
+        setLocaleState(l);
+        try {
+          localStorage.setItem("omnimd_locale", l);
+        } catch {
+          // ignore
+        }
       },
     }),
-    [t, locale]
+    [t, locale],
   );
 
   return (

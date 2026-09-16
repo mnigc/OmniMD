@@ -72,13 +72,42 @@ pub fn get_output_path_with_assets(
 
     let out = Path::new(output_dir);
     if has_assets {
-        let sub = out.join(&stem);
-        let md = resolve_unique_path(sub.join(format!("{}.md", stem)));
+        // Pick a unique bundle directory FIRST, so the markdown and its
+        // `assets/` always live in the same fresh folder. Resolving only the
+        // `.md` name (as before) let a second conversion of the same stem reuse
+        // the first run's `assets/` directory and overwrite its images.
+        let sub = resolve_unique_dir(out.join(&stem));
+        let md = sub.join(format!("{}.md", stem));
         let asset_dir = sub.join(ASSET_DIR_NAME);
         (md, Some(asset_dir))
     } else {
         let md = resolve_unique_path(out.join(format!("{}.md", stem)));
         (md, None)
+    }
+}
+
+/// Like [`resolve_unique_path`] but for a directory: returns the first
+/// non-existing `{name}`, `{name}-1`, `{name}-2`, … path.
+pub fn resolve_unique_dir(initial: PathBuf) -> PathBuf {
+    if !initial.exists() {
+        return initial;
+    }
+    let parent = initial
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let name = initial
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "output".to_string());
+
+    let mut counter = 1;
+    loop {
+        let path = parent.join(format!("{}-{}", name, counter));
+        if !path.exists() {
+            return path;
+        }
+        counter += 1;
     }
 }
 
@@ -185,4 +214,35 @@ pub fn get_supported_extensions() -> Vec<String> {
 
 pub fn get_supported_extensions_ref() -> &'static [&'static str] {
     SUPPORTED_EXTENSIONS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_unique_dir_avoids_existing_name() {
+        let base = std::env::temp_dir().join(format!("omnimd_dir_test_{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        // Existing `doc` directory must push the result to `doc-1`.
+        std::fs::create_dir_all(base.join("doc")).unwrap();
+        let resolved = resolve_unique_dir(base.join("doc"));
+        assert_eq!(
+            resolved.file_name().and_then(|n| n.to_str()),
+            Some("doc-1")
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn output_with_assets_keeps_md_and_assets_together() {
+        let base = std::env::temp_dir().join(format!("omnimd_out_test_{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let (md, assets) =
+            get_output_path_with_assets("D:/docs/report.pdf", base.to_str().unwrap(), true);
+        let assets = assets.unwrap();
+        assert_eq!(md.parent(), assets.parent());
+        assert!(assets.ends_with(ASSET_DIR_NAME));
+        std::fs::remove_dir_all(&base).ok();
+    }
 }

@@ -1,68 +1,18 @@
 import { Bold, Italic, Heading, List, ListOrdered, Link, Code, Quote, Undo2, Redo2 } from "lucide-react";
 import { EditorView } from "@codemirror/view";
-import { EditorSelection } from "@codemirror/state";
 import { undo, redo } from "@codemirror/commands";
 import { useI18n } from "../i18n";
+import {
+  wrapSelection,
+  insertLinePrefix,
+  insertCodeBlock,
+  insertLink,
+} from "../lib/markdownCommands";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { Separator } from "./ui/separator";
 
 interface EditorToolbarProps {
   view: EditorView | null;
-}
-
-function wrapSelection(view: EditorView, before: string, after: string, placeholderText?: string) {
-  view.focus();
-  view.dispatch(
-    view.state.changeByRange((range) => {
-      const text = view.state.sliceDoc(range.from, range.to);
-      const insert = text ? `${before}${text}${after}` : `${before}${placeholderText || ""}${after}`;
-      return {
-        range: EditorSelection.range(range.from, range.from + insert.length),
-        changes: { from: range.from, to: range.to, insert },
-      };
-    }),
-  );
-}
-
-function insertLinePrefix(view: EditorView, prefix: string) {
-  view.focus();
-  view.dispatch(
-    view.state.changeByRange((range) => {
-      const line = view.state.doc.lineAt(range.from);
-      return {
-        range: EditorSelection.range(range.from + prefix.length, range.to + prefix.length),
-        changes: { from: line.from, insert: prefix },
-      };
-    }),
-  );
-}
-
-function insertCodeBlock(view: EditorView) {
-  view.focus();
-  view.dispatch(
-    view.state.changeByRange((range) => {
-      const text = view.state.sliceDoc(range.from, range.to);
-      const insert = text ? `\`\`\`\n${text}\n\`\`\`` : "```\n\n```";
-      return {
-        range: EditorSelection.range(range.from, range.from + insert.length),
-        changes: { from: range.from, to: range.to, insert },
-      };
-    }),
-  );
-}
-
-function insertLink(view: EditorView) {
-  view.focus();
-  view.dispatch(
-    view.state.changeByRange((range) => {
-      const text = view.state.sliceDoc(range.from, range.to);
-      const insert = text ? `[${text}](url)` : "[text](url)";
-      return {
-        range: EditorSelection.range(range.from, range.from + insert.length),
-        changes: { from: range.from, to: range.to, insert },
-      };
-    }),
-  );
 }
 
 type ToolbarButton = {

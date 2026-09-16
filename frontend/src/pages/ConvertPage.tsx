@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from "react";
+﻿import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import {
   Copy,
   FileDown,
@@ -195,18 +195,10 @@ function SplitDivider({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
-  const startRatio = useRef(0.5);
-  const containerWidth = useRef(1000);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
     dragging.current = true;
-    const rect = containerRef.current?.parentElement?.getBoundingClientRect();
-    if (rect) containerWidth.current = rect.width;
-    const ratio = parseFloat(
-      document.body.style.getPropertyValue("--omnimd-split-ratio") || "0.5",
-    );
-    startRatio.current = ratio;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
 
@@ -215,25 +207,26 @@ function SplitDivider({
       if (!dragging.current) return;
       e.preventDefault();
       const rect = containerRef.current?.parentElement?.getBoundingClientRect();
-      if (!rect) return;
-      const containerW = rect.width;
+      if (!rect || rect.width === 0) return;
       const offsetX = e.clientX - rect.left;
       const ratio = Math.max(
         MIN_SPLIT_RATIO,
-        Math.min(MAX_SPLIT_RATIO, offsetX / containerW),
+        Math.min(MAX_SPLIT_RATIO, offsetX / rect.width),
       );
       onResize(ratio);
     };
 
-    const handleUp = () => {
+    const stop = () => {
       dragging.current = false;
     };
 
     document.addEventListener("pointermove", handleMove, { passive: false });
-    document.addEventListener("pointerup", handleUp);
+    document.addEventListener("pointerup", stop);
+    document.addEventListener("pointercancel", stop);
     return () => {
       document.removeEventListener("pointermove", handleMove);
-      document.removeEventListener("pointerup", handleUp);
+      document.removeEventListener("pointerup", stop);
+      document.removeEventListener("pointercancel", stop);
     };
   }, [onResize]);
 
@@ -263,20 +256,21 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [markdown, setMarkdown] = useState("");
   const [reconverting, setReconverting] = useState(false);
-  const editorRef = useRef<EditorView | null>(null);
+  // Kept in state (not a ref) so the toolbar re-renders once the editor view
+  // is ready; a ref left the toolbar disabled until an unrelated re-render.
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
 
   const isHistoryMode = previewSource === "history";
 
-  const storedRatio =
-    parseFloat(localStorage.getItem(SPLIT_RATIO_KEY) ?? "0.5") || 0.5;
-  const [splitRatio, setSplitRatio] = useState(
-    () => Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, storedRatio)),
-  );
+  const [splitRatio, setSplitRatio] = useState(() => {
+    const stored = parseFloat(localStorage.getItem(SPLIT_RATIO_KEY) ?? "0.5") || 0.5;
+    return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, stored));
+  });
 
-  const handleSplitChange = (ratio: number) => {
+  const handleSplitChange = useCallback((ratio: number) => {
     setSplitRatio(ratio);
     localStorage.setItem(SPLIT_RATIO_KEY, String(ratio));
-  };
+  }, []);
 
   const autoSavePath = currentResult?.outputPath || currentTask?.outputPath || null;
   const { saving, saveNow } = useAutoSave(markdown, autoSavePath);
@@ -288,10 +282,15 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
     (currentResult?.errors && currentResult.errors.length > 0) || !!currentTask?.error;
 
   useEffect(() => {
-    if (currentResult?.markdown) {
-      setMarkdown(currentResult.markdown);
+    // Reset even for an empty document (previously `?.markdown` kept the old
+    // content when a blank .md was opened from history).
+    if (currentResult) {
+      setMarkdown(currentResult.markdown ?? "");
     }
   }, [currentResult]);
+
+  // Parsing large Markdown is expensive; defer it so typing stays responsive.
+  const deferredMarkdown = useDeferredValue(markdown);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -358,7 +357,7 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="text-sm font-medium truncate max-w-[480px] cursor-help">
-                {currentTask.sourcePath.split("/").pop()}
+                {currentTask.sourcePath.split(/[\\/]/).pop()}
               </span>
             </TooltipTrigger>
             <TooltipContent side="bottom" align="start" className="max-w-xs text-xs">
@@ -388,16 +387,16 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
             className={`flex flex-col min-w-0 ${viewMode === "split" ? "border-r border-border" : ""}`}
             style={
               viewMode === "split"
-                ? { flex: "0 0 auto", width: `${splitRatio * 100}%` }
+                ? { flex: "0 0 auto", width: `calc(${splitRatio * 100}% - 3px)` }
                 : { flex: "1 1 0%" }
             }
           >
-            <EditorToolbar view={editorRef.current} />
+            <EditorToolbar view={editorView} />
             <div className="flex-1 overflow-hidden">
               <MarkdownEditor
                 value={markdown}
                 onChange={setMarkdown}
-                onViewReady={(v) => { editorRef.current = v; }}
+                onViewReady={setEditorView}
               />
             </div>
           </div>
@@ -412,7 +411,7 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
             className="flex flex-col min-w-0"
             style={
               viewMode === "split"
-                ? { flex: "0 0 auto", width: `${(1 - splitRatio) * 100}%` }
+                ? { flex: "0 0 auto", width: `calc(${(1 - splitRatio) * 100}% - 3px)` }
                 : { flex: "1 1 0%" }
             }
           >
@@ -425,7 +424,7 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
               </span>
             </div>
             <div className="flex-1 overflow-auto">
-              <MarkdownPreview content={markdown} />
+              <MarkdownPreview content={deferredMarkdown} />
             </div>
           </div>
         )}
@@ -464,12 +463,19 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
           variant="outline"
           size="sm"
           onClick={async () => {
-            if (!navigator.clipboard) return;
+            if (!navigator.clipboard) {
+              showToast(t("convert.clipboardUnavailable"), 3000, "error");
+              return;
+            }
             try {
               await navigator.clipboard.writeText(markdown);
               showToast(t("toast.copied"), 2000);
-            } catch {
-              // ignore
+            } catch (err) {
+              showToast(
+                err instanceof Error ? err.message : t("convert.clipboardUnavailable"),
+                3000,
+                "error"
+              );
             }
           }}
         >
@@ -482,12 +488,19 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
             variant="outline"
             size="sm"
             onClick={async () => {
-              if (!navigator.clipboard) return;
+              if (!navigator.clipboard) {
+                showToast(t("convert.clipboardUnavailable"), 3000, "error");
+                return;
+              }
               try {
                 await navigator.clipboard.writeText(markdownToPlainText(markdown));
                 showToast(t("toast.copied"), 2000);
-              } catch {
-                // ignore
+              } catch (err) {
+                showToast(
+                  err instanceof Error ? err.message : t("convert.clipboardUnavailable"),
+                  3000,
+                  "error"
+                );
               }
             }}
           >
@@ -510,11 +523,16 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                   defaultPath: defaultName,
                   filters: [{ name: "Markdown", extensions: ["md"] }],
                 });
-                if (filePath) {
-                  await writeTextFile(filePath, markdown);
-                }
-              } catch {
-                // user cancelled
+                // `null` means the user cancelled the dialog — not an error.
+                if (!filePath) return;
+                await writeTextFile(filePath, markdown);
+                showToast(t("convert.saveSuccess"), 2000);
+              } catch (err) {
+                showToast(
+                  err instanceof Error ? err.message : t("app.createFileFailed"),
+                  3000,
+                  "error"
+                );
               }
             }}
           >
@@ -571,8 +589,12 @@ export function ConvertPage({ onNavigate }: ConvertPageProps) {
                   },
                   result,
                 );
-              } catch (err: any) {
-                // ignore
+              } catch (err) {
+                showToast(
+                  `${t("convert.reconvertFailed")}: ${err instanceof Error ? err.message : String(err)}`,
+                  3000,
+                  "error"
+                );
               } finally {
                 setReconverting(false);
               }
