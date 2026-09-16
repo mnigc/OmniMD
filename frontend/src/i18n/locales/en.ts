@@ -173,6 +173,14 @@
     defaultOutputDir: "Default output directory",
     privacy: "Privacy",
     privacyNote: "Local files are never uploaded. Conversion runs entirely on your device.",
+    storage: "Storage",
+    webviewCache: "Web cache",
+    logsCache: "App logs",
+    storageClear: "Clear",
+    storageClearing: "Clearing…",
+    storageCleared: "Cleared {size}",
+    storageHint:
+      "The web cache is temporary browser data — clearing it never touches your settings or library. Logs are for diagnostics only and can be cleared anytime.",
   },
   error: {
     suggest: {

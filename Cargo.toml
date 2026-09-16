@@ -1,6 +1,6 @@
 [package]
 name = "omnimd"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 build = "build.rs"
 
@@ -32,6 +32,13 @@ chrono = "0.4"
 # out of the box (no system SQLite required on Windows).
 rusqlite = { version = "0.32", features = ["bundled"] }
 tracing-subscriber = "0.3"
+
+# Settings → 存储：按 DISK_CACHE 类型清除 WebView2 磁盘缓存。必须与 wry 依赖
+# 的 webview2-com 保持同版本（Cargo.lock 锁定 0.38.2 / windows-core 0.61），
+# 否则 COM 接口类型不一致，cast 会失败。
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

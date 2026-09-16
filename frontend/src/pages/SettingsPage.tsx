@@ -1,5 +1,5 @@
 ﻿import { useEffect, useRef, useState } from "react";
-import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Cpu, Loader2 } from "lucide-react";
+import { Monitor, Moon, Sun, ShieldCheck, FolderOpen, Cpu, HardDrive, Trash2, Loader2 } from "lucide-react";
 import { useI18n, type Locale } from "../i18n";
 import { type ThemeMode } from "../lib/theme";
 import { useThemeMode } from "../hooks/useThemeMode";
@@ -10,7 +10,13 @@ import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useUpdateStore } from "../store/useUpdateStore";
-import { getAppVersion } from "../api/tauriApi";
+import {
+  getAppVersion,
+  getCacheInfo,
+  clearWebviewCache,
+  clearLogs,
+  type CacheInfo,
+} from "../api/tauriApi";
 import { pickOutputDir } from "../api/dialogs";
 import { showToast } from "../lib/toast";
 
@@ -38,9 +44,23 @@ interface NavSection {
 const SECTIONS: NavSection[] = [
   { id: "appearance", icon: <Sun size={15} />, labelKey: "settings.appearance" },
   { id: "conversion", icon: <Cpu size={15} />, labelKey: "settings.conversion" },
+  { id: "storage", icon: <HardDrive size={15} />, labelKey: "settings.storage" },
   { id: "privacy", icon: <ShieldCheck size={15} />, labelKey: "settings.privacy" },
   { id: "about", icon: <Monitor size={15} />, labelKey: "settings.about" },
 ];
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const exp = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1
+  );
+  const value = bytes / 1024 ** exp;
+  const num =
+    exp === 0 || value >= 100 ? Math.round(value) : value.toFixed(1);
+  return `${num} ${units[exp]}`;
+}
 
 function InfoRow({
   label,
@@ -191,6 +211,82 @@ export function SettingsPage() {
     }
   };
 
+  const [cacheInfo, setCacheInfo] = useState<CacheInfo | null>(null);
+  const [cacheLoaded, setCacheLoaded] = useState(false);
+  const [clearing, setClearing] = useState<"webview" | "logs" | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getCacheInfo()
+      .then((info) => {
+        if (!cancelled) setCacheInfo(info);
+      })
+      .catch(() => {
+        // 占用读取失败时界面显示为 —，不弹错误打扰设置页。
+      })
+      .finally(() => {
+        if (!cancelled) setCacheLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleClearCache = async (kind: "webview" | "logs") => {
+    const before =
+      kind === "webview"
+        ? cacheInfo?.webviewCacheBytes
+        : cacheInfo?.logsBytes;
+    setClearing(kind);
+    try {
+      const info =
+        kind === "webview" ? await clearWebviewCache() : await clearLogs();
+      setCacheInfo(info);
+      const after =
+        kind === "webview" ? info.webviewCacheBytes : info.logsBytes;
+      const freed =
+        before != null && after != null ? Math.max(0, before - after) : 0;
+      showToast(t("settings.storageCleared", { size: formatBytes(freed) }));
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : String(err),
+        3000,
+        "error"
+      );
+    } finally {
+      setClearing(null);
+    }
+  };
+
+  const renderStorageRow = (
+    label: string,
+    bytes: number | null | undefined,
+    kind: "webview" | "logs"
+  ) => (
+    <InfoRow label={label}>
+      <div className="flex items-center justify-end gap-2">
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {bytes != null ? formatBytes(bytes) : "—"}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void handleClearCache(kind)}
+          disabled={clearing !== null}
+        >
+          {clearing === kind ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <Trash2 size={12} />
+          )}
+          {clearing === kind
+            ? t("settings.storageClearing")
+            : t("settings.storageClear")}
+        </Button>
+      </div>
+    </InfoRow>
+  );
+
   return (
     <div className="h-full overflow-hidden flex">
       <aside className="w-48 shrink-0 border-r border-border p-3 pt-4 overflow-y-auto">
@@ -293,6 +389,36 @@ export function SettingsPage() {
                     </span>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div id="storage">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <HardDrive size={16} />
+                  {t("settings.storage")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col divide-y divide-border">
+                  {cacheLoaded && cacheInfo?.webviewCacheBytes != null
+                    ? renderStorageRow(
+                        t("settings.webviewCache"),
+                        cacheInfo.webviewCacheBytes,
+                        "webview"
+                      )
+                    : null}
+                  {renderStorageRow(
+                    t("settings.logsCache"),
+                    cacheInfo?.logsBytes,
+                    "logs"
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground/70 mt-2.5">
+                  {t("settings.storageHint")}
+                </p>
               </CardContent>
             </Card>
           </div>

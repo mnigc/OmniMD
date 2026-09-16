@@ -194,3 +194,25 @@ export async function batchListTasks(): Promise<BatchTaskDto[]> {
 export async function batchGetSummary(): Promise<BatchSummaryDto> {
   return invoke<BatchSummaryDto>("batch_get_summary");
 }
+
+// ---- Settings: storage (cache & logs) ----
+
+export interface CacheInfo {
+  /** WebView2 磁盘缓存字节数；非 Windows 平台为 null（不支持清理）。 */
+  webviewCacheBytes: number | null;
+  logsBytes: number;
+}
+
+export async function getCacheInfo(): Promise<CacheInfo> {
+  return invoke<CacheInfo>("get_cache_info");
+}
+
+/** 清除 WebView2 磁盘缓存（不动 localStorage/设置），返回清理后的最新占用。 */
+export async function clearWebviewCache(): Promise<CacheInfo> {
+  return invoke<CacheInfo>("clear_webview_cache");
+}
+
+/** 清理应用日志（当前日志截断、轮转副本删除），返回清理后的最新占用。 */
+export async function clearLogs(): Promise<CacheInfo> {
+  return invoke<CacheInfo>("clear_logs");
+}

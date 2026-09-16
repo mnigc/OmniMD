@@ -1,7 +1,7 @@
 {
   "productName": "OmniMD",
   "identifier": "com.omnid.app",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "build": {
     "frontendDist": "frontend/dist",
     "devUrl": "http://localhost:1421",

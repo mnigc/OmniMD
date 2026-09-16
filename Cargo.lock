@@ -2839,7 +2839,7 @@ dependencies = [
 
 [[package]]
 name = "omnimd"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anydoc",
  "async-trait",
@@ -2858,6 +2858,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "webview2-com",
+ "windows-core 0.61.2",
 ]
 
 [[package]]

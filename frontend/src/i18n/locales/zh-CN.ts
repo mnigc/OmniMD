@@ -172,6 +172,14 @@
     defaultOutputDir: "默认输出目录",
     privacy: "隐私",
     privacyNote: "本地文件不会上传，转换全程在你的设备上完成。",
+    storage: "存储",
+    webviewCache: "网页缓存",
+    logsCache: "应用日志",
+    storageClear: "清除",
+    storageClearing: "清除中…",
+    storageCleared: "已清理 {size}",
+    storageHint:
+      "网页缓存只是浏览器的临时文件，清除不影响设置与知识库数据；日志仅供诊断，可随时清除。",
   },
   error: {
     suggest: {

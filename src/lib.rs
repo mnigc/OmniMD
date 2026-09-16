@@ -4,6 +4,7 @@ pub mod file_utils;
 pub mod markdown_pipeline;
 pub mod db;
 pub mod text_utils;
+pub mod cache;
 
 use std::sync::Mutex;
 use std::sync::Arc;
@@ -701,7 +702,7 @@ fn batch_get_summary(app: tauri::AppHandle) -> Result<BatchSummaryDto, String> {
 
 
 /// Directory that holds the runtime log files (created on demand).
-fn log_dir() -> std::path::PathBuf {
+pub(crate) fn log_dir() -> std::path::PathBuf {
     std::env::var("APPDATA")
         .map(|p| std::path::PathBuf::from(p).join("OmniMD").join("logs"))
         .unwrap_or_else(|_| std::env::temp_dir().join("omnimd_logs"))
@@ -923,6 +924,9 @@ pub fn run() {
             batch_set_concurrency,
             batch_list_tasks,
             batch_get_summary,
+            cache::get_cache_info,
+            cache::clear_webview_cache,
+            cache::clear_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
