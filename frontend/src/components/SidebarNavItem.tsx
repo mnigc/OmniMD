@@ -24,7 +24,7 @@ export function SidebarNavItem({
         "relative flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150",
         collapsed && "justify-center px-0",
         active
-          ? "bg-primary/12 text-primary font-medium shadow-[inset_0_1px_0_0_hsl(0_0%_100%/0.04)]"
+          ? "bg-primary/12 text-primary font-medium"
           : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
       )}
     >

@@ -39,7 +39,7 @@ export function SegmentedControl<T extends string>({
             "flex items-center justify-center rounded-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             size === "sm" ? "h-7 w-8" : "h-8 w-9",
             value === opt.value
-              ? "bg-background text-foreground shadow-sm ring-1 ring-border"
+              ? "bg-card text-foreground dark:bg-background"
               : "text-muted-foreground hover:text-foreground"
           )}
         >

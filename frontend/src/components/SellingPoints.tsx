@@ -32,7 +32,7 @@ export function SellingPoints({ className }: { className?: string }) {
         return (
           <span
             key={point.labelKey}
-            className="inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full border border-border/70 bg-card text-xs text-muted-foreground shadow-card"
+            className="inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full border border-border/70 bg-card text-xs text-muted-foreground"
           >
             <Icon size={12} className="shrink-0 text-primary/80" />
             {t(point.labelKey)}

@@ -250,7 +250,7 @@ export function HomePage() {
             {supportedFormats.slice(0, 12).map((f) => (
               <span
                 key={f}
-                className="inline-flex items-center h-5 px-1.5 rounded-md bg-muted/60 border border-border/50 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/90"
+                className="inline-flex items-center h-5 px-1.5 rounded-md bg-muted border border-border text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
               >
                 {f}
               </span>
@@ -318,7 +318,7 @@ export function HomePage() {
                   className={cn(
                     "flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium transition-colors",
                     outputLocationMode === "sourceDir"
-                      ? "bg-background text-foreground shadow-sm"
+                      ? "bg-card text-foreground dark:bg-background"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >
@@ -331,7 +331,7 @@ export function HomePage() {
                   className={cn(
                     "flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium transition-colors",
                     outputLocationMode === "custom"
-                      ? "bg-background text-foreground shadow-sm"
+                      ? "bg-card text-foreground dark:bg-background"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >

@@ -9,9 +9,6 @@
         sm: "calc(var(--radius) - 4px)",
       },
       boxShadow: {
-        card: "0 1px 2px 0 hsl(224 40% 20% / 0.04), 0 1px 3px 0 hsl(224 40% 20% / 0.03)",
-        "card-hover":
-          "0 4px 16px -4px hsl(224 40% 25% / 0.14), 0 1px 3px hsl(224 40% 25% / 0.06)",
         cta: "0 4px 14px -2px hsl(var(--primary) / 0.35)",
       },
       colors: {

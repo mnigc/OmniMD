@@ -96,7 +96,7 @@ function SettingsNav({
           className={cn(
             "flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium text-left transition-all duration-200",
             activeId === section.id
-              ? "bg-primary/10 text-primary shadow-sm"
+              ? "bg-primary/10 text-primary"
               : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
           )}
         >
@@ -313,7 +313,7 @@ export function SettingsPage() {
                       className={cn(
                         "flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                         theme === opt.value
-                          ? "border-primary bg-accent text-accent-foreground shadow-sm"
+                          ? "border-primary bg-accent text-accent-foreground"
                           : "border-input text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
                       )}
                     >
@@ -340,7 +340,7 @@ export function SettingsPage() {
                           className={cn(
                             "h-7 px-3 rounded-md text-xs font-medium transition-colors",
                             sidebarDefaultOpen === opt.value
-                              ? "bg-background text-foreground shadow-sm"
+                              ? "bg-card text-foreground dark:bg-background"
                               : "text-muted-foreground hover:text-foreground"
                           )}
                         >
@@ -479,7 +479,7 @@ export function SettingsPage() {
                           className={cn(
                             "h-7 px-3 rounded-md text-xs font-medium transition-colors",
                             locale === opt.value
-                              ? "bg-background text-foreground shadow-sm"
+                              ? "bg-card text-foreground dark:bg-background"
                               : "text-muted-foreground hover:text-foreground"
                           )}
                         >

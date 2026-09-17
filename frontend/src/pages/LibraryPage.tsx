@@ -992,7 +992,7 @@ export function LibraryPage() {
                         className={cn(
                           "flex items-center gap-1 h-6 px-2 rounded-md text-xs font-medium transition-colors",
                           libraryViewMode === mode
-                            ? "bg-background text-foreground shadow-sm"
+                            ? "bg-card text-foreground dark:bg-background"
                             : "text-muted-foreground hover:text-foreground"
                         )}
                       >
@@ -1042,7 +1042,7 @@ export function LibraryPage() {
                   libraryViewMode === "preview" &&
                   previewDocId === selectedDoc.id && (
                     <div className="absolute inset-0 flex items-start justify-center pt-4 pointer-events-none">
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground bg-background/95 border border-border rounded-full px-3 py-1.5 shadow-sm">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground bg-background/95 border border-border rounded-full px-3 py-1.5">
                         <Loader2 size={12} className="animate-spin text-primary" />
                         {t("library.rendering")}
                       </div>

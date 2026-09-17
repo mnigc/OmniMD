@@ -191,7 +191,7 @@ const dropHandledNatively = useRef(false);
         className,
         isDragging
           ? "border-primary bg-primary/10 shadow-xl shadow-primary/15 scale-[1.01]"
-          : "border-border/70 bg-muted/20 hover:border-primary/50 hover:bg-muted/40 hover:shadow-md hover:shadow-primary/5"
+          : "border-border/70 bg-muted/20 hover:border-primary/50 hover:bg-muted/40"
       )}
     >
       <div

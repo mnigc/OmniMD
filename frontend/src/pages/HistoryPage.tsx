@@ -89,7 +89,7 @@ function HistoryCard({
       className={cn(
         "group flex items-center gap-4 p-3.5 rounded-xl border transition-all duration-200",
         "border-border/70 bg-background",
-        "hover:border-primary/30 hover:shadow-sm hover:shadow-primary/5",
+        "hover:border-primary/30",
         entry.status === "Failed" && "border-destructive/20 bg-destructive/5"
       )}
     >

@@ -251,7 +251,7 @@ export function App() {
           <PanelLeft size={18} />
         </Button>
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 via-violet-600 to-indigo-600 ring-1 ring-white/25 shadow-sm flex items-center justify-center">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 via-violet-600 to-indigo-600 ring-1 ring-white/25 flex items-center justify-center">
             <span className="text-white font-bold text-[11px] tracking-wide">OM</span>
           </div>
           <span className="font-semibold text-sm tracking-tight">
